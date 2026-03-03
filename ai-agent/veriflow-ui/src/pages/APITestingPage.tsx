@@ -9,7 +9,7 @@ import { api } from '../services/api'
 import { useSocket } from '../hooks/useSocket'
 import { getEnvironmentColor, type Environment } from '../config/environments'
 
-// Migrate environment data - fix URLs and add credentials
+// Migrate environment data - fix URLs (credentials fetched from localStorage which came from server)
 const migrateEnvironment = (env: any): any => {
   const updated = { ...env }
   
@@ -18,40 +18,13 @@ const migrateEnvironment = (env: any): any => {
     updated.baseUrl = updated.baseUrl.replace(/\/v3\/?$/, '')
   }
   
-  // Add SIT API credentials if missing or empty
-  if (updated.name === 'api-sit' && (!updated.apiKey || updated.apiKey === '')) {
-    updated.apiKey = '6ad35d5f-2e5c-4532-b3d6-8a51098e6650'
-    updated.clientId = 'tahud70ter'
-    updated.headers = {
-      'Content-Type': 'application/json',
-      'x-api-key': '6ad35d5f-2e5c-4532-b3d6-8a51098e6650'
-    }
-  }
-  
-  // Add UAT API credentials if missing or empty
-  if (updated.name === 'api-uat' && (!updated.apiKey || updated.apiKey === '')) {
-    updated.apiKey = '03527504-5a0d-4791-a956-43fd65bf74cf'
-    updated.clientId = 'lylgr6i80t'
-    updated.headers = {
-      'Content-Type': 'application/json',
-      'x-api-key': '03527504-5a0d-4791-a956-43fd65bf74cf'
-    }
-  }
-  
-  // Add PRODUCTION API credentials if missing or empty
-  if (updated.name === 'api-production' && (!updated.apiKey || updated.apiKey === '')) {
-    updated.apiKey = '66348187-c030-41b9-bbe1-8664fefea076'
-    updated.clientId = 'zknqqzn8va'
-    updated.headers = {
-      'Content-Type': 'application/json',
-      'x-api-key': '66348187-c030-41b9-bbe1-8664fefea076'
-    }
-  }
+  // Credentials should already be in localStorage from EnvironmentsPage API fetch
+  // No hardcoded credentials here - they come from the server via EnvironmentsPage
   
   return updated
 }
 
-// Load environments from localStorage
+// Load environments from localStorage (credentials already fetched by EnvironmentsPage)
 const loadEnvironments = (): Environment[] => {
   const stored = localStorage.getItem('veriflow_environments')
   if (stored) {
@@ -62,48 +35,40 @@ const loadEnvironments = (): Environment[] => {
     localStorage.setItem('veriflow_environments', JSON.stringify(parsed.map(migrateEnvironment)))
     return migrated
   }
+  // Return empty defaults - credentials and URLs must be configured via .env and Environments page
   return [
     { 
       name: 'api-sit', 
       label: 'API SIT', 
       type: 'api', 
-      baseUrl: 'https://api.pfsit.xyz', 
+      baseUrl: '', 
       color: 'blue', 
       icon: '⚡',
-      apiKey: '6ad35d5f-2e5c-4532-b3d6-8a51098e6650',
-      clientId: 'tahud70ter',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': '6ad35d5f-2e5c-4532-b3d6-8a51098e6650'
-      }
+      apiKey: '',
+      clientId: '',
+      headers: { 'Content-Type': 'application/json' }
     },
     { 
       name: 'api-uat', 
       label: 'API UAT', 
       type: 'api', 
-      baseUrl: 'https://api.pfuat.xyz', 
+      baseUrl: '', 
       color: 'yellow', 
       icon: '🚀',
-      apiKey: '03527504-5a0d-4791-a956-43fd65bf74cf',
-      clientId: 'lylgr6i80t',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': '03527504-5a0d-4791-a956-43fd65bf74cf'
-      }
+      apiKey: '',
+      clientId: '',
+      headers: { 'Content-Type': 'application/json' }
     },
     { 
       name: 'api-production', 
       label: 'API PRODUCTION', 
       type: 'api', 
-      baseUrl: 'https://api.prismforce.com', 
+      baseUrl: '', 
       color: 'green', 
       icon: '✅',
-      apiKey: '66348187-c030-41b9-bbe1-8664fefea076',
-      clientId: 'zknqqzn8va',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': '66348187-c030-41b9-bbe1-8664fefea076'
-      }
+      apiKey: '',
+      clientId: '',
+      headers: { 'Content-Type': 'application/json' }
     },
   ]
 }

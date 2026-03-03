@@ -5,12 +5,23 @@ import path from 'path'
 
 dotenv.config({ path: path.join(__dirname, '../../.env') })
 
+// Helper to ensure required env vars exist (for TypeScript type narrowing)
+function requireEnv(name: string): string {
+  const value = process.env[name]
+  if (!value) {
+    console.error(`FATAL: ${name} environment variable is not configured`)
+    process.exit(1)
+  }
+  return value
+}
+
+// Database configuration - DB_HOST and DB_PASSWORD are required
 const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
+  host: requireEnv('DB_HOST'),
   port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'veriflow_ai',
+  database: process.env.DB_NAME || 'veriflow',
   user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'postgres',
+  password: requireEnv('DB_PASSWORD'),
 })
 
 async function seed() {
@@ -20,10 +31,10 @@ async function seed() {
     const client = await pool.connect()
     
     try {
-      // Create default admin user
-      const username = 'admin'
-      const email = 'admin@veriflow.ai'
-      const password = 'admin123'
+      // Create default admin user (credentials from environment variables)
+      const username = process.env.SEED_ADMIN_USERNAME || 'admin'
+      const email = process.env.SEED_ADMIN_EMAIL || 'admin@veriflow.ai'
+      const password = process.env.SEED_ADMIN_PASSWORD || 'ChangeThisPassword123!'
       
       // Check if user already exists
       const existingUser = await client.query(
@@ -44,14 +55,14 @@ async function seed() {
         )
         
         console.log('✓ Default admin user created')
-        console.log('  Username: admin')
-        console.log('  Password: admin123')
+        console.log(`  Username: ${username}`)
+        console.log('  Password: [hidden - check SEED_ADMIN_PASSWORD in .env]')
       }
       
-      // Create a test user as well
-      const testUsername = 'test'
-      const testEmail = 'test@veriflow.ai'
-      const testPassword = 'test1234'
+      // Create a test user as well (credentials from environment variables)
+      const testUsername = process.env.SEED_TEST_USERNAME || 'test'
+      const testEmail = process.env.SEED_TEST_EMAIL || 'test@veriflow.ai'
+      const testPassword = process.env.SEED_TEST_PASSWORD || 'ChangeThisPassword123!'
       
       const existingTestUser = await client.query(
         'SELECT id FROM users WHERE username = $1 OR email = $2',
@@ -69,21 +80,21 @@ async function seed() {
         )
         
         console.log('✓ Test user created')
-        console.log('  Username: test')
-        console.log('  Password: test1234')
+        console.log(`  Username: ${testUsername}`)
+        console.log('  Password: [hidden - check SEED_TEST_PASSWORD in .env]')
       }
       
       console.log('\n✅ Database seeding completed!')
       console.log('\n📋 Login Credentials:')
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
       console.log('👤 Admin Account:')
-      console.log('   Email:    admin@veriflow.ai')
-      console.log('   Username: admin')
-      console.log('   Password: admin123')
+      console.log(`   Email:    ${email}`)
+      console.log(`   Username: ${username}`)
+      console.log('   Password: [hidden - check SEED_ADMIN_PASSWORD in .env]')
       console.log('\n👤 Test Account:')
-      console.log('   Email:    test@veriflow.ai')
-      console.log('   Username: test')
-      console.log('   Password: test1234')
+      console.log(`   Email:    ${testEmail}`)
+      console.log(`   Username: ${testUsername}`)
+      console.log('   Password: [hidden - check SEED_TEST_PASSWORD in .env]')
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
       
     } finally {

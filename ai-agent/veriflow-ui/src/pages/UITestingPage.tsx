@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Globe, Play, CheckCircle2, XCircle, Clock, Loader2,
-  RefreshCw, FileText, Eye, Download, ChevronDown, ChevronUp, Server
+  RefreshCw, Eye, Download, ChevronDown, ChevronUp, Server
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { api } from '../services/api'
@@ -17,36 +17,37 @@ const loadEnvironments = (): Environment[] => {
     // Filter to only show UI environments
     return parsed.filter((env: any) => env.type === 'ui')
   }
+  // Return empty defaults - credentials and URLs must be configured via .env and Environments page
   return [
     { 
       name: 'sit', 
       label: 'SIT', 
       type: 'ui', 
-      baseUrl: 'https://pf.pfsit.xyz/selectprism/login', 
+      baseUrl: '', 
       color: 'blue', 
       icon: '🧪',
-      username: 'prismforce_sp_sit@prismforce.ai',
-      password: '@!agent_123'
+      username: '',
+      password: ''
     },
     { 
       name: 'uat', 
       label: 'UAT', 
       type: 'ui', 
-      baseUrl: 'https://selectprism.pfuat.xyz/selectprism/login', 
+      baseUrl: '', 
       color: 'yellow', 
       icon: '🚀',
-      username: 'testuser11@gmail.com',
-      password: '@!agent_123'
+      username: '',
+      password: ''
     },
     { 
       name: 'production', 
       label: 'PRODUCTION', 
       type: 'ui', 
-      baseUrl: 'https://pf.prismforce.com/selectprism/login', 
+      baseUrl: '', 
       color: 'green', 
       icon: '✅',
-      username: 'prismforce_sp_system@prismforce.ai',
-      password: '@!agent_123'
+      username: '',
+      password: ''
     },
   ]
 }

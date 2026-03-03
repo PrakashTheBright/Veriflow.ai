@@ -12,6 +12,7 @@ import reportRoutes from './routes/reports'
 import userRoutes from './routes/users'
 import testCaseRoutes from './routes/testcases'
 import testcaseHistoryRoutes from './routes/testcaseHistory'
+import credentialsRoutes from './routes/credentials'
 import { initDatabase } from './database/init'
 import { autoCleanup } from './utils/cleanup'
 import { checkModuleAccess } from './middleware/moduleAccess'
@@ -56,6 +57,7 @@ app.use('/api/reports', checkModuleAccess, reportRoutes)
 app.use('/api/users', checkModuleAccess, userRoutes)
 app.use('/api/testcases', checkModuleAccess, testCaseRoutes)
 app.use('/api/testcase-history', checkModuleAccess, testcaseHistoryRoutes)
+app.use('/api/credentials', checkModuleAccess, credentialsRoutes)
 
 // Health check
 app.get('/api/health', (req, res) => {

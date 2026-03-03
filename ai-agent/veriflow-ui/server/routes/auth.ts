@@ -1,13 +1,24 @@
 import { Router } from 'express'
 import bcrypt from 'bcryptjs'
-import jwt from 'jsonwebtoken'
+import jwt, { SignOptions } from 'jsonwebtoken'
 import { v4 as uuidv4 } from 'uuid'
 import pool from '../database/init'
 
 const router = Router()
 
-const JWT_SECRET = process.env.JWT_SECRET || 'veriflow-ai-secret-key-change-in-production'
-const JWT_EXPIRES_IN = '7d'
+// Helper to ensure required env vars exist (for TypeScript type narrowing)
+function requireEnv(name: string): string {
+  const value = process.env[name]
+  if (!value) {
+    console.error(`FATAL: ${name} environment variable is not configured`)
+    process.exit(1)
+  }
+  return value
+}
+
+// JWT configuration - must be configured in .env - no fallback for security
+const JWT_SECRET = requireEnv('JWT_SECRET')
+const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN || '7d') as SignOptions['expiresIn']
 
 // Sign Up
 router.post('/signup', async (req, res) => {

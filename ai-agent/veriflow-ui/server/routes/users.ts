@@ -5,7 +5,18 @@ import pool from '../database/init'
 
 const router = Router()
 
-const JWT_SECRET = process.env.JWT_SECRET || 'veriflow-ai-secret-key-change-in-production'
+// Helper to ensure required env vars exist (for TypeScript type narrowing)
+function requireEnv(name: string): string {
+  const value = process.env[name]
+  if (!value) {
+    console.error(`FATAL: ${name} environment variable is not configured`)
+    process.exit(1)
+  }
+  return value
+}
+
+// JWT configuration - must be configured in .env - no fallback for security
+const JWT_SECRET = requireEnv('JWT_SECRET')
 
 // Extend Express Request type
 interface AuthRequest extends Request {

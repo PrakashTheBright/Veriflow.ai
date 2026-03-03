@@ -1,10 +1,16 @@
 const { faker } = require('@faker-js/faker');
 
-// Base URL from environment or default
-const BASE_URL = process.env.API_BASE_URL || 'https://selectprism.pfuat.xyz';
+// Base URL from environment - required
+const BASE_URL = process.env.API_BASE_URL;
+if (!BASE_URL) {
+  console.warn('Warning: API_BASE_URL not configured in environment - API tests may fail');
+}
 
-// API Key from environment or default
-const API_KEY = process.env.API_KEY || 'your-api-key-here';
+// API Key from environment - required
+const API_KEY = process.env.API_KEY;
+if (!API_KEY) {
+  console.warn('Warning: API_KEY not configured in environment - API tests may fail');
+}
 
 // API Endpoints
 const ENDPOINTS = {
