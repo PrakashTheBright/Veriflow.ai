@@ -88,8 +88,8 @@ router.post('/generate', async (req: Request, res: Response) => {
         {
           role: 'system',
           content: testType === 'ui' 
-            ? 'You are a Senior QA Automation Architect with expertise in enterprise web applications. Generate structured, comprehensive UI test cases based on feature requirements. Return only valid JSON without any markdown formatting or code blocks. Generate values ONLY for the requested fields.'
-            : 'You are an expert QA engineer specializing in API test case design. Generate comprehensive API test cases with proper structure and validation criteria. Return only valid JSON without any markdown formatting or code blocks. Generate values ONLY for the requested fields.'
+            ? 'You are a Senior QA Automation Architect with expertise in enterprise web applications. Generate multiple structured, comprehensive UI test cases based on feature requirements. Return only valid JSON without any markdown formatting or code blocks. Generate values ONLY for the requested fields. Include positive, negative, edge cases, and boundary test scenarios for comprehensive coverage.'
+            : 'You are an expert QA engineer specializing in API test case design. Generate multiple comprehensive API test cases with proper structure and validation criteria. Return only valid JSON without any markdown formatting or code blocks. Generate values ONLY for the requested fields. Include positive flows, error handling, edge cases, and validation scenarios for comprehensive coverage.'
         },
         {
           role: 'user',
@@ -98,7 +98,7 @@ router.post('/generate', async (req: Request, res: Response) => {
       ],
       model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
       temperature: 0.7,
-      max_tokens: 3000,
+      max_tokens: 8000,
       response_format: { type: 'json_object' }
     })
 
@@ -117,37 +117,58 @@ router.post('/generate', async (req: Request, res: Response) => {
       throw new Error('Invalid AI response format')
     }
 
+    // Handle both single test case and multiple test cases response formats
+    let testCasesArray: any[] = []
+    
+    if (Array.isArray(testCaseData)) {
+      testCasesArray = testCaseData
+    } else if (testCaseData.testCases && Array.isArray(testCaseData.testCases)) {
+      testCasesArray = testCaseData.testCases
+    } else if (testCaseData.test_cases && Array.isArray(testCaseData.test_cases)) {
+      testCasesArray = testCaseData.test_cases
+    } else {
+      // Single test case - wrap in array
+      testCasesArray = [testCaseData]
+    }
+
     // Map the response to proper field keys
     const fieldMapping = testType === 'ui' ? UI_FIELD_KEYS : API_FIELD_KEYS
-    const result: Record<string, any> = {}
+    const results: Record<string, any>[] = []
 
-    // Map each field from the response
-    if (selectedFields && selectedFields.length > 0) {
-      selectedFields.forEach(fieldLabel => {
-        const fieldKey = fieldMapping[fieldLabel]
-        if (fieldKey && testCaseData[fieldKey] !== undefined) {
-          result[fieldKey] = testCaseData[fieldKey]
-        } else if (testCaseData[fieldLabel] !== undefined) {
-          result[fieldMapping[fieldLabel] || fieldLabel] = testCaseData[fieldLabel]
-        }
-      })
-    } else {
-      // Fallback to full response mapping
-      Object.entries(testCaseData).forEach(([key, value]) => {
-        result[key] = value
-      })
-    }
+    testCasesArray.forEach((tc, index) => {
+      const result: Record<string, any> = {}
 
-    // Ensure testCaseId is always present
-    if (!result.testCaseId) {
-      result.testCaseId = `TC_${testType.toUpperCase()}_${Date.now().toString().slice(-6)}`
-    }
+      // Map each field from the response
+      if (selectedFields && selectedFields.length > 0) {
+        selectedFields.forEach(fieldLabel => {
+          const fieldKey = fieldMapping[fieldLabel]
+          if (fieldKey && tc[fieldKey] !== undefined) {
+            result[fieldKey] = tc[fieldKey]
+          } else if (tc[fieldLabel] !== undefined) {
+            result[fieldMapping[fieldLabel] || fieldLabel] = tc[fieldLabel]
+          }
+        })
+      } else {
+        // Fallback to full response mapping
+        Object.entries(tc).forEach(([key, value]) => {
+          result[key] = value
+        })
+      }
 
-    console.log('Test case generated successfully:', result.testCaseId)
+      // Ensure testCaseId is always present and unique
+      if (!result.testCaseId) {
+        result.testCaseId = `TC_${testType.toUpperCase()}_${Date.now().toString().slice(-6)}_${index + 1}`
+      }
+
+      results.push(result)
+    })
+
+    console.log(`Generated ${results.length} test cases successfully`)
 
     res.json({ 
       success: true,
-      testCase: result 
+      testCases: results,
+      testCase: results[0] // Keep backward compatibility
     })
 
   } catch (error: any) {
@@ -186,14 +207,15 @@ function createDynamicPrompt(
   if (testType === 'ui') {
     return `You are a Senior QA Automation Architect.
 
-Generate a structured UI test case based on the provided feature requirements.
+Generate 5 DIFFERENT structured UI test cases based on the provided feature requirements.
+Include a mix of: positive flows, negative scenarios, edge cases, boundary tests, and validation tests.
 
 INPUT:
 Feature Name: ${testCaseName}
 Requirement Description: ${testContent}
 ${uploadedFileName ? `Referenced File: ${uploadedFileName}` : ''}
 
-SELECTED FIELDS TO GENERATE:
+SELECTED FIELDS TO GENERATE FOR EACH TEST CASE:
 ${fieldsToGenerate.map((f, i) => `${i + 1}. ${f}`).join('\n')}
 
 FIELD DEFINITIONS:
@@ -217,14 +239,23 @@ FIELD DEFINITIONS:
 - executionDate: Leave as "Not executed"
 - remarks: Additional notes or observations
 
-OUTPUT FORMAT (JSON only, generate ONLY requested fields):
+OUTPUT FORMAT (JSON array with 5 test cases):
 {
-    ${fieldDefinitions}
+  "testCases": [
+    {
+        ${fieldDefinitions}
+    },
+    {
+        ${fieldDefinitions}
+    }
+    // ... 3 more test cases
+  ]
 }
 
 RULES:
-- Generate ONLY the fields listed above
-- Test Case ID format: TC_UI_XXX
+- Generate EXACTLY 5 different test cases
+- Each test case must have a unique testCaseId (TC_UI_001, TC_UI_002, etc.)
+- Include: 1-2 positive flows, 1-2 negative scenarios, 1-2 edge/boundary cases
 - Test steps must be clear, atomic, and automation-friendly
 - Expected result should validate specific UI behavior
 - Use realistic values based on the requirement
@@ -233,14 +264,15 @@ RULES:
   } else {
     return `You are an expert API QA Architect.
 
-Generate a comprehensive API test case based on the provided requirements.
+Generate 5 DIFFERENT comprehensive API test cases based on the provided requirements.
+Include a mix of: success flows, error handling, edge cases, validation tests, and security scenarios.
 
 INPUT:
 API Name: ${testCaseName}
 Requirement Description: ${testContent}
 ${uploadedFileName ? `Referenced File: ${uploadedFileName}` : ''}
 
-SELECTED FIELDS TO GENERATE:
+SELECTED FIELDS TO GENERATE FOR EACH TEST CASE:
 ${fieldsToGenerate.map((f, i) => `${i + 1}. ${f}`).join('\n')}
 
 FIELD DEFINITIONS:
@@ -264,17 +296,25 @@ FIELD DEFINITIONS:
 - status: Leave as "Not Executed"
 - remarks: Additional notes
 
-OUTPUT FORMAT (JSON only, generate ONLY requested fields):
+OUTPUT FORMAT (JSON array with 5 test cases):
 {
-    ${fieldDefinitions}
+  "testCases": [
+    {
+        ${fieldDefinitions}
+    },
+    {
+        ${fieldDefinitions}
+    }
+    // ... 3 more test cases
+  ]
 }
 
 RULES:
-- Generate ONLY the fields listed above
-- Test Case ID format: TC_API_XXX
+- Generate EXACTLY 5 different test cases
+- Each test case must have a unique testCaseId (TC_API_001, TC_API_002, etc.)
+- Include: success flow (200/201), validation errors (400), auth failures (401/403), not found (404), and edge cases
 - Use realistic endpoint paths and payloads
-- Expected status code must be appropriate for the operation
-- Include proper error scenarios consideration
+- Expected status code must be appropriate for the scenario
 - Return valid JSON only, no markdown`
   }
 }

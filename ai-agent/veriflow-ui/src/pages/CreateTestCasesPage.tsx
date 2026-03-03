@@ -56,7 +56,7 @@ export default function CreateTestCasesPage() {
   const [testCaseName, setTestCaseName] = useState('')
   const [testContent, setTestContent] = useState('')
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
-  const [generatedTestCase, setGeneratedTestCase] = useState<GeneratedTestCaseData | null>(null)
+  const [generatedTestCases, setGeneratedTestCases] = useState<GeneratedTestCaseData[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
   const [downloadFormat, setDownloadFormat] = useState<'md' | 'json' | 'csv'>('csv')
   const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set())
@@ -70,7 +70,7 @@ export default function CreateTestCasesPage() {
       .filter(field => field.required)
       .map(field => field.key)
     setSelectedFields(new Set(requiredFields))
-    setGeneratedTestCase(null)
+    setGeneratedTestCases([])
   }, [testType])
 
   const handleFieldToggle = (fieldKey: string) => {
@@ -147,18 +147,24 @@ export default function CreateTestCasesPage() {
       }
 
       const data = await response.json()
-      if (!data.success || !data.testCase) throw new Error('Invalid response from server')
+      if (!data.success) throw new Error('Invalid response from server')
 
-      // Map the response to selected fields only
-      const filteredTestCase: GeneratedTestCaseData = {}
-      currentTemplateFields.forEach(field => {
-        if (selectedFields.has(field.key)) {
-          filteredTestCase[field.key] = data.testCase[field.key] || data.testCase[field.label] || '-'
-        }
+      // Handle multiple test cases
+      const testCasesArray = data.testCases || (data.testCase ? [data.testCase] : [])
+      
+      // Map each response to selected fields only
+      const filteredTestCases: GeneratedTestCaseData[] = testCasesArray.map((tc: any) => {
+        const filteredTestCase: GeneratedTestCaseData = {}
+        currentTemplateFields.forEach(field => {
+          if (selectedFields.has(field.key)) {
+            filteredTestCase[field.key] = tc[field.key] || tc[field.label] || '-'
+          }
+        })
+        return filteredTestCase
       })
       
-      setGeneratedTestCase(filteredTestCase)
-      toast.success('Test case generated successfully!')
+      setGeneratedTestCases(filteredTestCases)
+      toast.success(`${filteredTestCases.length} test cases generated successfully!`)
     } catch (error: any) {
       console.error('Error generating test case:', error)
       toast.error(error.message || 'Failed to generate test case')
@@ -168,47 +174,59 @@ export default function CreateTestCasesPage() {
   }
 
   const convertToCSV = (): string => {
-    if (!generatedTestCase) return ''
+    if (generatedTestCases.length === 0) return ''
     
     const selectedFieldsList = currentTemplateFields.filter(f => selectedFields.has(f.key))
     const headers = selectedFieldsList.map(f => f.label)
     const escapeCSV = (val: string | string[] | undefined) => {
       if (!val) return '""'
-      const str = Array.isArray(val) ? val.map((s, i) => `${i + 1}. ${s}`).join('\n') : String(val)
+      const str = Array.isArray(val) ? val.map((s, i) => `${i + 1}. ${s}`).join(' | ') : String(val)
       return `"${str.replace(/"/g, '""')}"`
     }
-    const values = selectedFieldsList.map(f => escapeCSV(generatedTestCase[f.key]))
-    return [headers.join(','), values.join(',')].join('\n')
+    
+    const rows = generatedTestCases.map(tc => 
+      selectedFieldsList.map(f => escapeCSV(tc[f.key])).join(',')
+    )
+    return [headers.join(','), ...rows].join('\n')
   }
 
   const convertToJSON = (): string => {
-    if (!generatedTestCase) return '{}'
+    if (generatedTestCases.length === 0) return '[]'
     const selectedFieldsList = currentTemplateFields.filter(f => selectedFields.has(f.key))
-    const output: { [key: string]: string | string[] | undefined } = {}
-    selectedFieldsList.forEach(f => {
-      output[f.label] = generatedTestCase[f.key]
+    const output = generatedTestCases.map(tc => {
+      const item: { [key: string]: string | string[] | undefined } = {}
+      selectedFieldsList.forEach(f => {
+        item[f.label] = tc[f.key]
+      })
+      return item
     })
     return JSON.stringify(output, null, 2)
   }
 
   const convertToMarkdown = (): string => {
-    if (!generatedTestCase) return ''
+    if (generatedTestCases.length === 0) return ''
     const selectedFieldsList = currentTemplateFields.filter(f => selectedFields.has(f.key))
-    let md = `# Test Case: ${generatedTestCase.testCaseId || generatedTestCase.testCaseTitle || testCaseName}\n\n`
-    selectedFieldsList.forEach(f => {
-      const val = generatedTestCase[f.key]
-      if (Array.isArray(val)) {
-        md += `## ${f.label}\n${val.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\n`
-      } else {
-        md += `**${f.label}:** ${val || '-'}\n\n`
-      }
+    let md = `# Test Cases for: ${testCaseName}\n\n`
+    md += `**Total Test Cases:** ${generatedTestCases.length}\n\n---\n\n`
+    
+    generatedTestCases.forEach((tc, index) => {
+      md += `## Test Case ${index + 1}: ${tc.testCaseId || tc.testCaseTitle || `TC_${index + 1}`}\n\n`
+      selectedFieldsList.forEach(f => {
+        const val = tc[f.key]
+        if (Array.isArray(val)) {
+          md += `### ${f.label}\n${val.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\n`
+        } else {
+          md += `**${f.label}:** ${val || '-'}\n\n`
+        }
+      })
+      md += '---\n\n'
     })
     return md
   }
 
   const handleDownload = () => {
-    if (!generatedTestCase) {
-      toast.error('No test case to download')
+    if (generatedTestCases.length === 0) {
+      toast.error('No test cases to download')
       return
     }
 
@@ -218,18 +236,18 @@ export default function CreateTestCasesPage() {
     switch (downloadFormat) {
       case 'csv':
         content = convertToCSV()
-        fileName = `${baseName}.csv`
+        fileName = `${baseName}-test-cases.csv`
         mimeType = 'text/csv'
         break
       case 'json':
         content = convertToJSON()
-        fileName = `${baseName}.json`
+        fileName = `${baseName}-test-cases.json`
         mimeType = 'application/json'
         break
       case 'md':
       default:
         content = convertToMarkdown()
-        fileName = `${baseName}.md`
+        fileName = `${baseName}-test-cases.md`
         mimeType = 'text/markdown'
         break
     }
@@ -373,7 +391,7 @@ export default function CreateTestCasesPage() {
   }
 
   return (
-    <div className="h-screen w-full overflow-hidden bg-gray-950 p-6 flex flex-col">
+    <div className="min-h-screen w-full bg-gray-950 p-6 flex flex-col">
       {/* Header - Fixed */}
       <div className="flex items-center gap-4 mb-4 flex-shrink-0">
         <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500 to-purple-600 flex items-center justify-center shadow-lg shadow-purple-500/20">
@@ -386,11 +404,11 @@ export default function CreateTestCasesPage() {
       </div>
 
       {/* Main Content Area - Takes remaining height */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-4 min-h-0 overflow-hidden">
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-4 min-h-0">
         {/* Left Column - Input & Output (3/4 width) */}
-        <div className="lg:col-span-3 flex flex-col gap-4 min-h-0 overflow-hidden">
-          {/* Input Section - Scrollable */}
-          <div className="flex-shrink-0 overflow-y-auto max-h-[280px] space-y-3 pr-1">
+        <div className="lg:col-span-3 flex flex-col gap-4 min-h-0">
+          {/* Input Section - Static */}
+          <div className="flex-shrink-0 space-y-3">
             {/* Test Type Selection */}
             <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4">
               <label className="text-sm font-medium text-gray-300 mb-2 block">Select Test Type</label>
@@ -513,9 +531,9 @@ export default function CreateTestCasesPage() {
             )}
           </button>
 
-          {/* Generated Test Case Section - Fixed Height with Internal Scroll */}
+          {/* Generated Test Cases Section - Fixed Height with Internal Scroll */}
           <div className="flex-1 min-h-0 overflow-hidden">
-            {generatedTestCase ? (
+            {generatedTestCases.length > 0 ? (
               <div className="h-full bg-gray-900/50 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
                 {/* Header */}
                 <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gradient-to-r from-emerald-500/10 to-teal-500/10 flex-shrink-0">
@@ -524,8 +542,8 @@ export default function CreateTestCasesPage() {
                       <CheckCircle2 className="w-4 h-4 text-white" />
                     </div>
                     <div>
-                      <h3 className="font-semibold text-white text-sm">Generated Test Case</h3>
-                      <p className="text-xs text-gray-400">{selectedFields.size} fields • {testType.toUpperCase()} • {generatedTestCase.testCaseId || '-'}</p>
+                      <h3 className="font-semibold text-white text-sm">Generated Test Cases</h3>
+                      <p className="text-xs text-gray-400">{generatedTestCases.length} cases • {selectedFields.size} fields • {testType.toUpperCase()}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -543,7 +561,7 @@ export default function CreateTestCasesPage() {
                       className="flex items-center gap-1 px-2 py-1 bg-emerald-600 hover:bg-emerald-500 rounded text-white text-xs font-medium"
                     >
                       <Download className="w-3 h-3" />
-                      Download
+                      Download All
                     </button>
                   </div>
                 </div>
@@ -553,6 +571,11 @@ export default function CreateTestCasesPage() {
                   <table className="w-full border-collapse">
                     <thead className="sticky top-0 z-10">
                       <tr className="bg-gray-800">
+                        <th className="px-3 py-2 text-left border-b border-gray-700 bg-gray-800">
+                          <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider whitespace-nowrap">
+                            #
+                          </span>
+                        </th>
                         {currentTemplateFields
                           .filter(field => selectedFields.has(field.key))
                           .map((field) => (
@@ -565,20 +588,25 @@ export default function CreateTestCasesPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr className="bg-gray-900/30">
-                        {currentTemplateFields
-                          .filter(field => selectedFields.has(field.key))
-                          .map((field) => {
-                            const value = generatedTestCase[field.key]
-                            return (
-                              <td key={field.key} className="px-3 py-2 border-b border-gray-800/50 align-top">
-                                <div className="min-w-[80px] max-w-[220px]">
-                                  {renderTableCellValue(field.key, value)}
-                                </div>
-                              </td>
-                            )
-                          })}
-                      </tr>
+                      {generatedTestCases.map((testCase, index) => (
+                        <tr key={index} className={index % 2 === 0 ? 'bg-gray-900/30' : 'bg-gray-900/50'}>
+                          <td className="px-3 py-2 border-b border-gray-800/50 align-top">
+                            <span className="text-xs text-gray-500 font-medium">{index + 1}</span>
+                          </td>
+                          {currentTemplateFields
+                            .filter(field => selectedFields.has(field.key))
+                            .map((field) => {
+                              const value = testCase[field.key]
+                              return (
+                                <td key={field.key} className="px-3 py-2 border-b border-gray-800/50 align-top">
+                                  <div className="min-w-[80px] max-w-[220px]">
+                                    {renderTableCellValue(field.key, value)}
+                                  </div>
+                                </td>
+                              )
+                            })}
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -587,7 +615,7 @@ export default function CreateTestCasesPage() {
               <div className="h-full bg-gray-900/30 border border-dashed border-gray-700 rounded-xl flex items-center justify-center">
                 <div className="text-center">
                   <ClipboardList className="w-10 h-10 text-gray-600 mx-auto mb-2" />
-                  <p className="text-gray-500 text-sm">Generated test case will appear here</p>
+                  <p className="text-gray-500 text-sm">Generated test cases will appear here</p>
                 </div>
               </div>
             )}
