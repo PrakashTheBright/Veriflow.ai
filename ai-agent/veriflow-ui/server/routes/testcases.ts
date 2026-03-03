@@ -88,8 +88,8 @@ router.post('/generate', async (req: Request, res: Response) => {
         {
           role: 'system',
           content: testType === 'ui' 
-            ? 'You are a Senior QA Automation Architect with expertise in enterprise web applications. Generate structured, comprehensive UI test cases based on feature requirements. Return only valid JSON without any markdown formatting or code blocks. Generate values ONLY for the requested fields.'
-            : 'You are an expert QA engineer specializing in API test case design. Generate comprehensive API test cases with proper structure and validation criteria. Return only valid JSON without any markdown formatting or code blocks. Generate values ONLY for the requested fields.'
+            ? 'You are a Senior QA Automation Architect with expertise in enterprise web applications. Generate multiple structured, comprehensive UI test cases based on feature requirements. Return only valid JSON without any markdown formatting or code blocks. Generate values ONLY for the requested fields. Include positive, negative, edge cases, and boundary test scenarios for comprehensive coverage.'
+            : 'You are an expert QA engineer specializing in API test case design. Generate multiple comprehensive API test cases with proper structure and validation criteria. Return only valid JSON without any markdown formatting or code blocks. Generate values ONLY for the requested fields. Include positive flows, error handling, edge cases, and validation scenarios for comprehensive coverage.'
         },
         {
           role: 'user',
@@ -98,7 +98,7 @@ router.post('/generate', async (req: Request, res: Response) => {
       ],
       model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
       temperature: 0.7,
-      max_tokens: 3000,
+      max_tokens: 8000,
       response_format: { type: 'json_object' }
     })
 
@@ -117,37 +117,58 @@ router.post('/generate', async (req: Request, res: Response) => {
       throw new Error('Invalid AI response format')
     }
 
+    // Handle both single test case and multiple test cases response formats
+    let testCasesArray: any[] = []
+    
+    if (Array.isArray(testCaseData)) {
+      testCasesArray = testCaseData
+    } else if (testCaseData.testCases && Array.isArray(testCaseData.testCases)) {
+      testCasesArray = testCaseData.testCases
+    } else if (testCaseData.test_cases && Array.isArray(testCaseData.test_cases)) {
+      testCasesArray = testCaseData.test_cases
+    } else {
+      // Single test case - wrap in array
+      testCasesArray = [testCaseData]
+    }
+
     // Map the response to proper field keys
     const fieldMapping = testType === 'ui' ? UI_FIELD_KEYS : API_FIELD_KEYS
-    const result: Record<string, any> = {}
+    const results: Record<string, any>[] = []
 
-    // Map each field from the response
-    if (selectedFields && selectedFields.length > 0) {
-      selectedFields.forEach(fieldLabel => {
-        const fieldKey = fieldMapping[fieldLabel]
-        if (fieldKey && testCaseData[fieldKey] !== undefined) {
-          result[fieldKey] = testCaseData[fieldKey]
-        } else if (testCaseData[fieldLabel] !== undefined) {
-          result[fieldMapping[fieldLabel] || fieldLabel] = testCaseData[fieldLabel]
-        }
-      })
-    } else {
-      // Fallback to full response mapping
-      Object.entries(testCaseData).forEach(([key, value]) => {
-        result[key] = value
-      })
-    }
+    testCasesArray.forEach((tc, index) => {
+      const result: Record<string, any> = {}
 
-    // Ensure testCaseId is always present
-    if (!result.testCaseId) {
-      result.testCaseId = `TC_${testType.toUpperCase()}_${Date.now().toString().slice(-6)}`
-    }
+      // Map each field from the response
+      if (selectedFields && selectedFields.length > 0) {
+        selectedFields.forEach(fieldLabel => {
+          const fieldKey = fieldMapping[fieldLabel]
+          if (fieldKey && tc[fieldKey] !== undefined) {
+            result[fieldKey] = tc[fieldKey]
+          } else if (tc[fieldLabel] !== undefined) {
+            result[fieldMapping[fieldLabel] || fieldLabel] = tc[fieldLabel]
+          }
+        })
+      } else {
+        // Fallback to full response mapping
+        Object.entries(tc).forEach(([key, value]) => {
+          result[key] = value
+        })
+      }
 
-    console.log('Test case generated successfully:', result.testCaseId)
+      // Ensure testCaseId is always present and unique
+      if (!result.testCaseId) {
+        result.testCaseId = `TC_${testType.toUpperCase()}_${Date.now().toString().slice(-6)}_${index + 1}`
+      }
+
+      results.push(result)
+    })
+
+    console.log(`Generated ${results.length} test cases successfully`)
 
     res.json({ 
       success: true,
-      testCase: result 
+      testCases: results,
+      testCase: results[0] // Keep backward compatibility
     })
 
   } catch (error: any) {
@@ -186,21 +207,33 @@ function createDynamicPrompt(
   if (testType === 'ui') {
     return `You are a Senior QA Automation Architect.
 
-Generate a structured UI test case based on the provided feature requirements.
+Analyze the provided feature requirements and generate a COMPREHENSIVE set of UI test cases.
+Dynamically determine the appropriate number of test cases based on:
+- Complexity of the feature
+- Number of distinct scenarios possible
+- Coverage requirements (aim for complete coverage)
+
+Generate test cases to cover ALL of the following (as applicable):
+1. Positive/Happy path flows (valid inputs, successful operations)
+2. Negative scenarios (invalid inputs, error handling)
+3. Edge cases (boundary values, empty states, special characters)
+4. Validation tests (field validations, format checks)
+5. UI state variations (loading, disabled, read-only states)
+6. User permission scenarios (if applicable)
 
 INPUT:
 Feature Name: ${testCaseName}
 Requirement Description: ${testContent}
 ${uploadedFileName ? `Referenced File: ${uploadedFileName}` : ''}
 
-SELECTED FIELDS TO GENERATE:
+SELECTED FIELDS TO GENERATE FOR EACH TEST CASE:
 ${fieldsToGenerate.map((f, i) => `${i + 1}. ${f}`).join('\n')}
 
 FIELD DEFINITIONS:
-- testCaseId: Unique identifier (format: TC_UI_XXX)
+- testCaseId: Unique identifier (format: TC_UI_XXX, incrementing: TC_UI_001, TC_UI_002, etc.)
 - moduleName: Module or section of the application
 - featureName: Name of the feature being tested
-- testCaseTitle: Brief descriptive title of the test
+- testCaseTitle: Brief descriptive title of the test (should clearly indicate what is being tested)
 - requirementId: Associated requirement or story ID
 - priority: Test priority (High/Medium/Low)
 - severity: Defect severity if test fails (Critical/Major/Minor)
@@ -215,66 +248,90 @@ FIELD DEFINITIONS:
 - buildVersion: Leave as "TBD"
 - executedBy: Leave as "Not assigned"
 - executionDate: Leave as "Not executed"
-- remarks: Additional notes or observations
+- remarks: Additional notes - include scenario type (Positive/Negative/Edge Case/Validation)
 
-OUTPUT FORMAT (JSON only, generate ONLY requested fields):
+OUTPUT FORMAT (JSON array - generate as many test cases as needed for comprehensive coverage):
 {
-    ${fieldDefinitions}
+  "testCases": [
+    {
+        ${fieldDefinitions}
+    }
+  ]
 }
 
 RULES:
-- Generate ONLY the fields listed above
-- Test Case ID format: TC_UI_XXX
+- Generate the APPROPRIATE number of test cases for comprehensive coverage (typically 5-15 depending on complexity)
+- Each test case must have a unique testCaseId (TC_UI_001, TC_UI_002, etc.)
+- Each test case should test ONE specific scenario
 - Test steps must be clear, atomic, and automation-friendly
-- Expected result should validate specific UI behavior
+- Include a GOOD MIX of positive, negative, and edge cases
 - Use realistic values based on the requirement
-- Do not include any fields not requested
 - Return valid JSON only, no markdown`
   } else {
     return `You are an expert API QA Architect.
 
-Generate a comprehensive API test case based on the provided requirements.
+Analyze the provided API requirements and generate a COMPREHENSIVE set of API test cases.
+Dynamically determine the appropriate number of test cases based on:
+- API complexity and number of parameters
+- Possible response scenarios
+- Coverage requirements (aim for complete coverage)
+
+Generate test cases to cover ALL of the following (as applicable):
+1. Success flows (200, 201, 204 responses)
+2. Validation errors (400 - missing/invalid fields)
+3. Authentication failures (401 - unauthorized)
+4. Authorization failures (403 - forbidden)
+5. Resource not found (404)
+6. Conflict scenarios (409)
+7. Server errors (500 - internal server error)
+8. Edge cases (empty arrays, null values, special characters, max lengths)
+9. Security scenarios (injection attempts, XSS, unauthorized access)
 
 INPUT:
 API Name: ${testCaseName}
 Requirement Description: ${testContent}
 ${uploadedFileName ? `Referenced File: ${uploadedFileName}` : ''}
 
-SELECTED FIELDS TO GENERATE:
+SELECTED FIELDS TO GENERATE FOR EACH TEST CASE:
 ${fieldsToGenerate.map((f, i) => `${i + 1}. ${f}`).join('\n')}
 
 FIELD DEFINITIONS:
-- testCaseId: Unique identifier (format: TC_API_XXX)
+- testCaseId: Unique identifier (format: TC_API_XXX, incrementing: TC_API_001, TC_API_002, etc.)
 - apiName: Name of the API being tested
 - module: Module or service name
 - httpMethod: HTTP method (GET/POST/PUT/DELETE/PATCH)
 - endpointUrl: Full API endpoint path
 - authorizationType: Auth type (Bearer Token/API Key/OAuth2/None)
-- requestHeaders: JSON object of required headers
-- requestPayload: Request body as JSON string
+- requestHeaders: JSON object of required headers (compact format)
+- requestPayload: Request body as JSON (compact format)
 - queryParameters: Query params as JSON string
 - pathParameters: Path params as JSON string
 - preconditions: Prerequisites before API call
-- expectedStatusCode: Expected HTTP status code
-- expectedResponseBody: Expected response structure
+- expectedStatusCode: Expected HTTP status code (200, 400, 401, 404, 500, etc.)
+- expectedResponseBody: Expected response structure (compact format)
 - responseTime: Expected max response time (e.g., "<500ms")
 - databaseValidation: Database assertions to verify
 - webhookValidation: Webhook validations if applicable
 - actualResponse: Leave as "Pending execution"
 - status: Leave as "Not Executed"
-- remarks: Additional notes
+- remarks: Scenario type (Success/Validation Error/Auth Error/Edge Case/Security)
 
-OUTPUT FORMAT (JSON only, generate ONLY requested fields):
+OUTPUT FORMAT (JSON array - generate as many test cases as needed for comprehensive coverage):
 {
-    ${fieldDefinitions}
+  "testCases": [
+    {
+        ${fieldDefinitions}
+    }
+  ]
 }
 
 RULES:
-- Generate ONLY the fields listed above
-- Test Case ID format: TC_API_XXX
-- Use realistic endpoint paths and payloads
-- Expected status code must be appropriate for the operation
-- Include proper error scenarios consideration
+- Generate the APPROPRIATE number of test cases for comprehensive API coverage (typically 8-20 depending on complexity)
+- Each test case must have a unique testCaseId (TC_API_001, TC_API_002, etc.)
+- Each test case should test ONE specific scenario
+- Include realistic request payloads and expected responses
+- Expected status code must be appropriate for each scenario
+- Cover BOTH success and failure scenarios thoroughly
 - Return valid JSON only, no markdown`
   }
 }
