@@ -305,9 +305,28 @@ export default function CreateTestCasesPage() {
 
     // Handle long text values
     const stringValue = String(value)
+    
+    // Check if it looks like JSON
+    const isJsonLike = (stringValue.startsWith('{') && stringValue.endsWith('}')) || 
+                       (stringValue.startsWith('[') && stringValue.endsWith(']'))
+    
+    if (isJsonLike) {
+      try {
+        const parsed = JSON.parse(stringValue)
+        const formatted = JSON.stringify(parsed, null, 2)
+        return (
+          <pre className="text-gray-200 text-xs font-mono bg-gray-800/50 p-2 rounded-lg overflow-x-auto max-w-[300px] whitespace-pre-wrap break-all">
+            {formatted}
+          </pre>
+        )
+      } catch {
+        // Not valid JSON, fall through
+      }
+    }
+    
     if (stringValue.length > 100) {
       return (
-        <div className="text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">
+        <div className="text-gray-200 text-sm leading-relaxed whitespace-pre-wrap break-words max-w-[300px]">
           {stringValue}
         </div>
       )
@@ -568,38 +587,47 @@ export default function CreateTestCasesPage() {
 
                 {/* Table with Internal Scroll */}
                 <div className="flex-1 overflow-auto">
-                  <table className="w-full border-collapse">
+                  <table className="w-full border-collapse table-fixed">
                     <thead className="sticky top-0 z-10">
                       <tr className="bg-gray-800">
-                        <th className="px-3 py-2 text-left border-b border-gray-700 bg-gray-800">
+                        <th className="w-10 px-3 py-2 text-left border-b border-gray-700 bg-gray-800">
                           <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider whitespace-nowrap">
                             #
                           </span>
                         </th>
                         {currentTemplateFields
                           .filter(field => selectedFields.has(field.key))
-                          .map((field) => (
-                            <th key={field.key} className="px-3 py-2 text-left border-b border-gray-700 bg-gray-800">
-                              <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider whitespace-nowrap">
-                                {field.label}
-                              </span>
-                            </th>
-                          ))}
+                          .map((field) => {
+                            // Dynamic column widths based on field type
+                            const getColumnWidth = (key: string) => {
+                              if (key === 'testCaseId' || key === 'httpMethod' || key === 'status' || key === 'priority' || key === 'severity' || key === 'expectedStatusCode') return 'w-28'
+                              if (key === 'endpointUrl' || key === 'apiName' || key === 'testCaseTitle' || key === 'featureName') return 'w-48'
+                              if (key === 'requestPayload' || key === 'requestHeaders' || key === 'expectedResponseBody' || key === 'testSteps' || key === 'expectedResult') return 'w-64'
+                              return 'w-40'
+                            }
+                            return (
+                              <th key={field.key} className={`${getColumnWidth(field.key)} px-3 py-2 text-left border-b border-gray-700 bg-gray-800`}>
+                                <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider whitespace-nowrap">
+                                  {field.label}
+                                </span>
+                              </th>
+                            )
+                          })}
                       </tr>
                     </thead>
                     <tbody>
                       {generatedTestCases.map((testCase, index) => (
-                        <tr key={index} className={index % 2 === 0 ? 'bg-gray-900/30' : 'bg-gray-900/50'}>
-                          <td className="px-3 py-2 border-b border-gray-800/50 align-top">
-                            <span className="text-xs text-gray-500 font-medium">{index + 1}</span>
+                        <tr key={index} className={`${index % 2 === 0 ? 'bg-gray-900/30' : 'bg-gray-900/50'} hover:bg-gray-800/50 transition-colors`}>
+                          <td className="w-10 px-3 py-3 border-b border-gray-800/50 align-top">
+                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gray-700 text-xs text-gray-300 font-medium">{index + 1}</span>
                           </td>
                           {currentTemplateFields
                             .filter(field => selectedFields.has(field.key))
                             .map((field) => {
                               const value = testCase[field.key]
                               return (
-                                <td key={field.key} className="px-3 py-2 border-b border-gray-800/50 align-top">
-                                  <div className="min-w-[80px] max-w-[220px]">
+                                <td key={field.key} className="px-3 py-3 border-b border-gray-800/50 align-top">
+                                  <div className="overflow-hidden">
                                     {renderTableCellValue(field.key, value)}
                                   </div>
                                 </td>

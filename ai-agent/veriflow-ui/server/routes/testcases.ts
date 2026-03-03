@@ -207,8 +207,19 @@ function createDynamicPrompt(
   if (testType === 'ui') {
     return `You are a Senior QA Automation Architect.
 
-Generate 5 DIFFERENT structured UI test cases based on the provided feature requirements.
-Include a mix of: positive flows, negative scenarios, edge cases, boundary tests, and validation tests.
+Analyze the provided feature requirements and generate a COMPREHENSIVE set of UI test cases.
+Dynamically determine the appropriate number of test cases based on:
+- Complexity of the feature
+- Number of distinct scenarios possible
+- Coverage requirements (aim for complete coverage)
+
+Generate test cases to cover ALL of the following (as applicable):
+1. Positive/Happy path flows (valid inputs, successful operations)
+2. Negative scenarios (invalid inputs, error handling)
+3. Edge cases (boundary values, empty states, special characters)
+4. Validation tests (field validations, format checks)
+5. UI state variations (loading, disabled, read-only states)
+6. User permission scenarios (if applicable)
 
 INPUT:
 Feature Name: ${testCaseName}
@@ -219,10 +230,10 @@ SELECTED FIELDS TO GENERATE FOR EACH TEST CASE:
 ${fieldsToGenerate.map((f, i) => `${i + 1}. ${f}`).join('\n')}
 
 FIELD DEFINITIONS:
-- testCaseId: Unique identifier (format: TC_UI_XXX)
+- testCaseId: Unique identifier (format: TC_UI_XXX, incrementing: TC_UI_001, TC_UI_002, etc.)
 - moduleName: Module or section of the application
 - featureName: Name of the feature being tested
-- testCaseTitle: Brief descriptive title of the test
+- testCaseTitle: Brief descriptive title of the test (should clearly indicate what is being tested)
 - requirementId: Associated requirement or story ID
 - priority: Test priority (High/Medium/Low)
 - severity: Defect severity if test fails (Critical/Major/Minor)
@@ -237,35 +248,44 @@ FIELD DEFINITIONS:
 - buildVersion: Leave as "TBD"
 - executedBy: Leave as "Not assigned"
 - executionDate: Leave as "Not executed"
-- remarks: Additional notes or observations
+- remarks: Additional notes - include scenario type (Positive/Negative/Edge Case/Validation)
 
-OUTPUT FORMAT (JSON array with 5 test cases):
+OUTPUT FORMAT (JSON array - generate as many test cases as needed for comprehensive coverage):
 {
   "testCases": [
     {
         ${fieldDefinitions}
-    },
-    {
-        ${fieldDefinitions}
     }
-    // ... 3 more test cases
   ]
 }
 
 RULES:
-- Generate EXACTLY 5 different test cases
+- Generate the APPROPRIATE number of test cases for comprehensive coverage (typically 5-15 depending on complexity)
 - Each test case must have a unique testCaseId (TC_UI_001, TC_UI_002, etc.)
-- Include: 1-2 positive flows, 1-2 negative scenarios, 1-2 edge/boundary cases
+- Each test case should test ONE specific scenario
 - Test steps must be clear, atomic, and automation-friendly
-- Expected result should validate specific UI behavior
+- Include a GOOD MIX of positive, negative, and edge cases
 - Use realistic values based on the requirement
-- Do not include any fields not requested
 - Return valid JSON only, no markdown`
   } else {
     return `You are an expert API QA Architect.
 
-Generate 5 DIFFERENT comprehensive API test cases based on the provided requirements.
-Include a mix of: success flows, error handling, edge cases, validation tests, and security scenarios.
+Analyze the provided API requirements and generate a COMPREHENSIVE set of API test cases.
+Dynamically determine the appropriate number of test cases based on:
+- API complexity and number of parameters
+- Possible response scenarios
+- Coverage requirements (aim for complete coverage)
+
+Generate test cases to cover ALL of the following (as applicable):
+1. Success flows (200, 201, 204 responses)
+2. Validation errors (400 - missing/invalid fields)
+3. Authentication failures (401 - unauthorized)
+4. Authorization failures (403 - forbidden)
+5. Resource not found (404)
+6. Conflict scenarios (409)
+7. Server errors (500 - internal server error)
+8. Edge cases (empty arrays, null values, special characters, max lengths)
+9. Security scenarios (injection attempts, XSS, unauthorized access)
 
 INPUT:
 API Name: ${testCaseName}
@@ -276,45 +296,42 @@ SELECTED FIELDS TO GENERATE FOR EACH TEST CASE:
 ${fieldsToGenerate.map((f, i) => `${i + 1}. ${f}`).join('\n')}
 
 FIELD DEFINITIONS:
-- testCaseId: Unique identifier (format: TC_API_XXX)
+- testCaseId: Unique identifier (format: TC_API_XXX, incrementing: TC_API_001, TC_API_002, etc.)
 - apiName: Name of the API being tested
 - module: Module or service name
 - httpMethod: HTTP method (GET/POST/PUT/DELETE/PATCH)
 - endpointUrl: Full API endpoint path
 - authorizationType: Auth type (Bearer Token/API Key/OAuth2/None)
-- requestHeaders: JSON object of required headers
-- requestPayload: Request body as JSON string
+- requestHeaders: JSON object of required headers (compact format)
+- requestPayload: Request body as JSON (compact format)
 - queryParameters: Query params as JSON string
 - pathParameters: Path params as JSON string
 - preconditions: Prerequisites before API call
-- expectedStatusCode: Expected HTTP status code
-- expectedResponseBody: Expected response structure
+- expectedStatusCode: Expected HTTP status code (200, 400, 401, 404, 500, etc.)
+- expectedResponseBody: Expected response structure (compact format)
 - responseTime: Expected max response time (e.g., "<500ms")
 - databaseValidation: Database assertions to verify
 - webhookValidation: Webhook validations if applicable
 - actualResponse: Leave as "Pending execution"
 - status: Leave as "Not Executed"
-- remarks: Additional notes
+- remarks: Scenario type (Success/Validation Error/Auth Error/Edge Case/Security)
 
-OUTPUT FORMAT (JSON array with 5 test cases):
+OUTPUT FORMAT (JSON array - generate as many test cases as needed for comprehensive coverage):
 {
   "testCases": [
     {
         ${fieldDefinitions}
-    },
-    {
-        ${fieldDefinitions}
     }
-    // ... 3 more test cases
   ]
 }
 
 RULES:
-- Generate EXACTLY 5 different test cases
+- Generate the APPROPRIATE number of test cases for comprehensive API coverage (typically 8-20 depending on complexity)
 - Each test case must have a unique testCaseId (TC_API_001, TC_API_002, etc.)
-- Include: success flow (200/201), validation errors (400), auth failures (401/403), not found (404), and edge cases
-- Use realistic endpoint paths and payloads
-- Expected status code must be appropriate for the scenario
+- Each test case should test ONE specific scenario
+- Include realistic request payloads and expected responses
+- Expected status code must be appropriate for each scenario
+- Cover BOTH success and failure scenarios thoroughly
 - Return valid JSON only, no markdown`
   }
 }
