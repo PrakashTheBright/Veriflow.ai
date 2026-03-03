@@ -7,6 +7,7 @@ dist/
 # Environment files
 .env
 .env.local
+.env.example
 
 # Shared state (API test data)
 .shared-state.json
