@@ -1,0 +1,9 @@
+{
+  "name": "Create Candidate API",
+  "description": "Creates a new candidate via API",
+  "endpoint": "/api/v1/candidates",
+  "method": "POST",
+  "specFile": "2.CreateCandidateAPI.spec.js",
+  "testType": "playwright",
+  "tags": ["api", "candidate", "create"]
+}

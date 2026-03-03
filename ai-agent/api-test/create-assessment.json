@@ -1,0 +1,9 @@
+{
+  "name": "Create Assessment API",
+  "description": "Creates a new assessment via API",
+  "endpoint": "/api/v1/assessments",
+  "method": "POST",
+  "specFile": "1.CreateAssessmentAPI.spec.js",
+  "testType": "playwright",
+  "tags": ["api", "assessment", "create"]
+}

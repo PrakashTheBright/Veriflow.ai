@@ -1,0 +1,88 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install Dependencies",
+      "type": "shell",
+      "command": "npm install",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Build Agent",
+      "type": "shell",
+      "command": "npm run build",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$tsc"],
+      "presentation": {
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "Run Agent (Interactive)",
+      "type": "shell",
+      "command": "npm run dev -- ${input:testCaseFile}",
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Run Agent (Headless)",
+      "type": "shell",
+      "command": "npm run dev -- ${input:testCaseFile} --headless",
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Run Agent (Auto-Approve)",
+      "type": "shell",
+      "command": "npm run dev -- ${input:testCaseFile} --auto-approve",
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "Install Playwright Browsers",
+      "type": "shell",
+      "command": "npx playwright install chromium",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always"
+      }
+    },
+    {
+      "label": "Lint Code",
+      "type": "shell",
+      "command": "npm run lint",
+      "group": "test",
+      "problemMatcher": ["$eslint-stylish"]
+    }
+  ],
+  "inputs": [
+    {
+      "id": "testCaseFile",
+      "type": "promptString",
+      "description": "Path to the test case file (YAML or JSON)",
+      "default": "test-cases/approved/login-flow.yaml"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment files
+.env
+.env.local
+
+# Shared state (API test data)
+.shared-state.json
+
+# Credentials (NEVER commit)
+credentials/*.json
+credentials/*.yaml
+!credentials/.gitkeep
+
+# Logs
+logs/*.log
+logs/*.json
+
+# Reports (optional - may want to keep)
+reports/output/*
+!reports/output/.gitkeep
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+
+# Temporary files
+*.tmp
+*.temp

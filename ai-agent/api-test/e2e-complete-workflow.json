@@ -1,0 +1,9 @@
+{
+  "name": "E2E Complete Workflow",
+  "description": "End-to-end API workflow test",
+  "endpoint": "/api/v1/*",
+  "method": "MULTIPLE",
+  "specFile": "E2E-CompleteWorkflow.spec.js",
+  "testType": "playwright",
+  "tags": ["api", "e2e", "workflow", "integration"]
+}

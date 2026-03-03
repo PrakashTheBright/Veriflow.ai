@@ -1,0 +1,9 @@
+{
+  "name": "Add Resume To Candidate",
+  "description": "Uploads resume file to candidate",
+  "endpoint": "/api/v1/candidates/{id}/resume",
+  "method": "POST",
+  "specFile": "3.AddResumeToCandidate.spec.js",
+  "testType": "playwright",
+  "tags": ["api", "candidate", "resume", "upload"]
+}

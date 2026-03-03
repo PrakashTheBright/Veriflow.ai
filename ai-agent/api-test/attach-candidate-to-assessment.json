@@ -1,0 +1,9 @@
+{
+  "name": "Attach Candidate To Assessment",
+  "description": "Attaches a candidate to an assessment",
+  "endpoint": "/api/v1/assessments/{id}/candidates",
+  "method": "POST",
+  "specFile": "4.AttachCandidateToAssessment.spec.js",
+  "testType": "playwright",
+  "tags": ["api", "assessment", "candidate", "attach"]
+}
