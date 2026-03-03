@@ -452,8 +452,8 @@ export default function CreateTestCasesPage() {
             </div>
 
             {/* Test Description */}
-            <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4">
-              <label className="text-sm font-medium text-gray-300 mb-2 block">Test Description <span className="text-gray-500 text-xs">(required if no file uploaded)</span></label>
+            <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-6">
+              <label className="text-sm font-medium text-gray-300 mb-3 block">Test Description <span className="text-gray-500 text-xs">(required if no file uploaded)</span></label>
               <textarea
                 value={testContent}
                 onChange={(e) => setTestContent(e.target.value)}
@@ -461,8 +461,8 @@ export default function CreateTestCasesPage() {
                   ? 'Describe the UI test scenario...'
                   : 'Describe the API test scenario...'
                 }
-                rows={2}
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-cyan-500 resize-none"
+                rows={6}
+                className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-cyan-500 resize-y min-h-[120px]"
               />
             </div>
 
