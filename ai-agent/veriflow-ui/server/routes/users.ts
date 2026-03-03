@@ -55,11 +55,32 @@ const requireAdmin = (req: AuthRequest, res: Response, next: NextFunction) => {
   next()
 }
 
+// Get all available modules (admin only)
+router.get('/modules', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, name, path, icon, description, display_order FROM modules WHERE is_active = true ORDER BY display_order'
+    )
+    res.json({ modules: result.rows })
+  } catch (error) {
+    console.error('Get modules error:', error)
+    res.status(500).json({ message: 'Failed to fetch modules' })
+  }
+})
+
 // Get all users (admin only)
 router.get('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, email, role, created_at, updated_at FROM users ORDER BY created_at DESC'
+      `SELECT u.id, u.username, u.email, u.role, u.created_at, u.updated_at,
+        COALESCE(
+          (SELECT json_agg(json_build_object('id', m.id, 'name', m.name, 'path', m.path))
+           FROM user_modules um
+           JOIN modules m ON um.module_id = m.id
+           WHERE um.user_id = u.id), '[]'
+        ) AS modules
+       FROM users u
+       ORDER BY u.created_at DESC`
     )
 
     res.json({ users: result.rows })
@@ -75,7 +96,15 @@ router.get('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res
     const { id } = req.params
 
     const result = await pool.query(
-      'SELECT id, username, email, role, created_at, updated_at FROM users WHERE id = $1',
+      `SELECT u.id, u.username, u.email, u.role, u.created_at, u.updated_at,
+        COALESCE(
+          (SELECT json_agg(json_build_object('id', m.id, 'name', m.name, 'path', m.path))
+           FROM user_modules um
+           JOIN modules m ON um.module_id = m.id
+           WHERE um.user_id = u.id), '[]'
+        ) AS modules
+       FROM users u
+       WHERE u.id = $1`,
       [id]
     )
 
@@ -93,7 +122,7 @@ router.get('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res
 // Create new user (admin only)
 router.post('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
-    const { username, email, password, role } = req.body
+    const { username, email, password, role, moduleIds } = req.body
 
     // Validation
     if (!username || !email || !password) {
@@ -129,6 +158,33 @@ router.post('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: 
 
     const user = result.rows[0]
 
+    // Assign modules to user
+    if (moduleIds && Array.isArray(moduleIds) && moduleIds.length > 0) {
+      for (const moduleId of moduleIds) {
+        await pool.query(
+          'INSERT INTO user_modules (user_id, module_id) VALUES ($1, $2) ON CONFLICT (user_id, module_id) DO NOTHING',
+          [user.id, moduleId]
+        )
+      }
+    } else if (userRole === 'admin') {
+      // Admin users get all modules by default
+      await pool.query(
+        `INSERT INTO user_modules (user_id, module_id)
+         SELECT $1, id FROM modules
+         ON CONFLICT (user_id, module_id) DO NOTHING`,
+        [user.id]
+      )
+    }
+
+    // Get assigned modules
+    const modulesResult = await pool.query(
+      `SELECT m.id, m.name, m.path 
+       FROM user_modules um 
+       JOIN modules m ON um.module_id = m.id 
+       WHERE um.user_id = $1`,
+      [user.id]
+    )
+
     res.status(201).json({
       message: 'User created successfully',
       user: {
@@ -137,6 +193,7 @@ router.post('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: 
         email: user.email,
         role: user.role,
         createdAt: user.created_at,
+        modules: modulesResult.rows
       },
     })
   } catch (error) {
@@ -149,7 +206,7 @@ router.post('/', authenticateToken, requireAdmin, async (req: AuthRequest, res: 
 router.put('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params
-    const { username, email, password, role } = req.body
+    const { username, email, password, role, moduleIds } = req.body
 
     // Check if user exists
     const existingUser = await pool.query(
@@ -210,22 +267,54 @@ router.put('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res
       values.push(role)
     }
 
-    if (updates.length === 0) {
-      return res.status(400).json({ message: 'No fields to update' })
+    // Update user fields if any
+    if (updates.length > 0) {
+      updates.push(`updated_at = CURRENT_TIMESTAMP`)
+      values.push(id)
+
+      const query = `
+        UPDATE users 
+        SET ${updates.join(', ')}
+        WHERE id = $${paramCount}
+        RETURNING id, username, email, role, created_at, updated_at
+      `
+
+      await pool.query(query, values)
     }
 
-    updates.push(`updated_at = CURRENT_TIMESTAMP`)
-    values.push(id)
+    // Update module assignments if moduleIds is provided
+    if (moduleIds !== undefined && Array.isArray(moduleIds)) {
+      // Delete existing module assignments
+      await pool.query('DELETE FROM user_modules WHERE user_id = $1', [id])
+      
+      // Insert new module assignments
+      for (const moduleId of moduleIds) {
+        await pool.query(
+          'INSERT INTO user_modules (user_id, module_id) VALUES ($1, $2) ON CONFLICT (user_id, module_id) DO NOTHING',
+          [id, moduleId]
+        )
+      }
+    }
 
-    const query = `
-      UPDATE users 
-      SET ${updates.join(', ')}
-      WHERE id = $${paramCount}
-      RETURNING id, username, email, role, created_at, updated_at
-    `
+    // Fetch updated user with modules
+    const userResult = await pool.query(
+      `SELECT 
+        u.id, u.username, u.email, u.role, u.created_at, u.updated_at,
+        COALESCE(
+          json_agg(
+            json_build_object('id', m.id, 'name', m.name, 'path', m.path)
+          ) FILTER (WHERE m.id IS NOT NULL), 
+          '[]'
+        ) as modules
+       FROM users u
+       LEFT JOIN user_modules um ON u.id = um.user_id
+       LEFT JOIN modules m ON um.module_id = m.id
+       WHERE u.id = $1
+       GROUP BY u.id`,
+      [id]
+    )
 
-    const result = await pool.query(query, values)
-    const user = result.rows[0]
+    const user = userResult.rows[0]
 
     res.json({
       message: 'User updated successfully',
@@ -236,6 +325,7 @@ router.put('/:id', authenticateToken, requireAdmin, async (req: AuthRequest, res
         role: user.role,
         createdAt: user.created_at,
         updatedAt: user.updated_at,
+        modules: user.modules
       },
     })
   } catch (error) {

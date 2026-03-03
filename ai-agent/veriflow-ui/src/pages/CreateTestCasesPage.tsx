@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { FileText, Code, Sparkles, Download, Upload, CheckCircle2, ClipboardList, X, Check, Square, CheckSquare, LayoutTemplate } from 'lucide-react'
+import { FileText, Code, Sparkles, Download, Upload, CheckCircle2, ClipboardList, X, Check, Square, CheckSquare, LayoutTemplate, ChevronDown, ChevronUp, Copy, History } from 'lucide-react'
 import toast from 'react-hot-toast'
+import TestCaseHistoryModal from '../components/TestCaseHistoryModal'
 
 // Template field configurations
 const UI_TEST_TEMPLATE_FIELDS = [
@@ -56,10 +57,42 @@ export default function CreateTestCasesPage() {
   const [testCaseName, setTestCaseName] = useState('')
   const [testContent, setTestContent] = useState('')
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
+  const [uploadedFileContent, setUploadedFileContent] = useState<string>('')
   const [generatedTestCases, setGeneratedTestCases] = useState<GeneratedTestCaseData[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
   const [downloadFormat, setDownloadFormat] = useState<'md' | 'json' | 'csv'>('csv')
   const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set())
+  const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false)
+
+  // Load test cases from history
+  const handleLoadFromHistory = (testCases: any[], name: string, type: 'ui' | 'api') => {
+    setTestType(type)
+    setTestCaseName(name)
+    setGeneratedTestCases(testCases)
+    // Update selected fields based on what's in the loaded test cases
+    if (testCases.length > 0) {
+      const fields = Object.keys(testCases[0])
+      setSelectedFields(new Set(fields))
+    }
+  }
+
+  // Toggle cell expansion
+  const toggleCellExpand = (cellId: string) => {
+    const newExpanded = new Set(expandedCells)
+    if (newExpanded.has(cellId)) {
+      newExpanded.delete(cellId)
+    } else {
+      newExpanded.add(cellId)
+    }
+    setExpandedCells(newExpanded)
+  }
+
+  // Copy text to clipboard
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text)
+    toast.success('Copied to clipboard')
+  }
 
   // Get current template fields based on test type
   const currentTemplateFields = testType === 'ui' ? UI_TEST_TEMPLATE_FIELDS : API_TEST_TEMPLATE_FIELDS
@@ -101,12 +134,45 @@ export default function CreateTestCasesPage() {
     const file = e.target.files?.[0]
     if (file) {
       setUploadedFile(file)
-      toast.success(`File "${file.name}" uploaded successfully`)
+      
+      // Read file content for text-based files
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        const content = event.target?.result as string
+        if (content) {
+          // Limit content to first 15000 characters to avoid token limits
+          const truncatedContent = content.length > 15000 
+            ? content.substring(0, 15000) + '\n\n... (content truncated for processing)'
+            : content
+          setUploadedFileContent(truncatedContent)
+          toast.success(`File "${file.name}" uploaded and content extracted successfully`)
+        }
+      }
+      reader.onerror = () => {
+        toast.error('Failed to read file content')
+        setUploadedFileContent('')
+      }
+      
+      // Determine if file is text-based
+      const textExtensions = ['.json', '.md', '.txt', '.csv', '.yaml', '.yml', '.js', '.ts', '.jsx', '.tsx', '.xml', '.html', '.sql']
+      const isTextFile = file.type.includes('text') || 
+                         file.type === 'application/json' ||
+                         file.type === 'application/xml' ||
+                         textExtensions.some(ext => file.name.toLowerCase().endsWith(ext))
+      
+      if (isTextFile) {
+        reader.readAsText(file)
+      } else {
+        // For binary files (doc, docx, pdf), we can't read content directly
+        setUploadedFileContent(`[Binary file uploaded: ${file.name}]\n\nNote: This is a binary file format. Please paste the text content into the Test Description field for best results, or provide a summary of the file contents.`)
+        toast.info(`File "${file.name}" uploaded. Binary files may have limited analysis - consider pasting content into description.`)
+      }
     }
   }
 
   const removeFile = () => {
     setUploadedFile(null)
+    setUploadedFileContent('')
   }
 
   const handleGenerate = async () => {
@@ -129,16 +195,25 @@ export default function CreateTestCasesPage() {
         .filter(f => selectedFields.has(f.key))
         .map(f => f.label)
 
+      // Prepare content - send both description and file content separately
+      const requestBody = {
+        testCaseName,
+        testType,
+        testContent: testContent.trim(),  // Only send manual description
+        uploadedFileName: uploadedFile?.name || '',
+        uploadedFileContent: uploadedFileContent.trim(),  // Send file content separately
+        selectedFields: selectedFieldLabels
+      }
+      
+      console.log('=== Sending to backend ===' )
+      console.log('testContent length:', requestBody.testContent.length)
+      console.log('uploadedFileContent length:', requestBody.uploadedFileContent.length)
+      console.log('uploadedFileName:', requestBody.uploadedFileName)
+      
       const response = await fetch('http://localhost:4000/api/testcases/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          testCaseName, 
-          testType, 
-          testContent, 
-          uploadedFileName: uploadedFile?.name,
-          selectedFields: selectedFieldLabels
-        })
+        body: JSON.stringify(requestBody)
       })
 
       if (!response.ok) {
@@ -165,6 +240,31 @@ export default function CreateTestCasesPage() {
       
       setGeneratedTestCases(filteredTestCases)
       toast.success(`${filteredTestCases.length} test cases generated successfully!`)
+      
+      // Save to history
+      try {
+        const historyEntry = {
+          testCaseName,
+          testType,
+          inputSource: (testContent.trim() && uploadedFile) ? 'both' 
+            : uploadedFile ? 'file' 
+            : 'description',
+          inputFileName: uploadedFile?.name,
+          inputDescription: testContent.trim() || undefined,
+          testCases: filteredTestCases,
+          selectedFields: Array.from(selectedFields),
+          createdBy: 'User'
+        }
+        
+        await fetch('http://localhost:4000/api/testcase-history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(historyEntry)
+        })
+      } catch (historyError) {
+        console.warn('Failed to save to history:', historyError)
+        // Don't show error to user - history is optional
+      }
     } catch (error: any) {
       console.error('Error generating test case:', error)
       toast.error(error.message || 'Failed to generate test case')
@@ -283,22 +383,36 @@ export default function CreateTestCasesPage() {
     return <span className="text-gray-300">{value}</span>
   }
 
-  const renderTableCellValue = (fieldKey: string, value: string | string[] | undefined) => {
+  const renderTableCellValue = (fieldKey: string, value: string | string[] | undefined, rowIndex: number) => {
+    const cellId = `${rowIndex}-${fieldKey}`
+    const isExpanded = expandedCells.has(cellId)
+    
     if (!value || value === '-') {
       return <span className="text-gray-500 italic text-sm">-</span>
     }
     
     if (Array.isArray(value)) {
+      const shouldCollapse = value.length > 3 && !isExpanded
+      const displaySteps = shouldCollapse ? value.slice(0, 2) : value
       return (
         <div className="space-y-1.5">
-          {value.map((step, idx) => (
+          {displaySteps.map((step, idx) => (
             <div key={idx} className="flex gap-2 items-start">
               <span className="flex-shrink-0 w-5 h-5 rounded-full bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center text-white text-[10px] font-bold">
                 {idx + 1}
               </span>
-              <span className="text-gray-200 text-sm leading-snug">{step}</span>
+              <span className="text-gray-200 text-sm leading-snug break-words">{step}</span>
             </div>
           ))}
+          {value.length > 3 && (
+            <button
+              onClick={() => toggleCellExpand(cellId)}
+              className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
+            >
+              {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              {isExpanded ? 'Show less' : `Show ${value.length - 2} more steps`}
+            </button>
+          )}
         </div>
       )
     }
@@ -314,20 +428,71 @@ export default function CreateTestCasesPage() {
       try {
         const parsed = JSON.parse(stringValue)
         const formatted = JSON.stringify(parsed, null, 2)
+        const isLongJson = formatted.length > 100
+        const displayJson = isLongJson && !isExpanded ? JSON.stringify(parsed) : formatted
+        
         return (
-          <pre className="text-gray-200 text-xs font-mono bg-gray-800/50 p-2 rounded-lg overflow-x-auto max-w-[300px] whitespace-pre-wrap break-all">
-            {formatted}
-          </pre>
+          <div className="relative group">
+            <pre className={`text-gray-200 text-xs font-mono bg-gray-800/50 p-2 rounded-lg ${isExpanded ? 'whitespace-pre-wrap' : 'whitespace-nowrap overflow-hidden text-ellipsis'} break-all`} style={{ maxWidth: isExpanded ? 'none' : '200px' }}>
+              {displayJson}
+            </pre>
+            <div className="flex gap-1 mt-1">
+              {isLongJson && (
+                <button
+                  onClick={() => toggleCellExpand(cellId)}
+                  className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300"
+                >
+                  {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                  {isExpanded ? 'Collapse' : 'Expand'}
+                </button>
+              )}
+              <button
+                onClick={() => copyToClipboard(formatted)}
+                className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-300"
+              >
+                <Copy className="w-3 h-3" />
+                Copy
+              </button>
+            </div>
+          </div>
         )
       } catch {
         // Not valid JSON, fall through
       }
     }
     
-    if (stringValue.length > 100) {
+    // Handle long text (URLs, descriptions, etc.)
+    const isLongText = stringValue.length > 50
+    if (isLongText && !isExpanded) {
       return (
-        <div className="text-gray-200 text-sm leading-relaxed whitespace-pre-wrap break-words max-w-[300px]">
-          {stringValue}
+        <div>
+          <div className="text-gray-200 text-sm leading-relaxed break-words" style={{ wordBreak: 'break-word' }}>
+            {stringValue.substring(0, 50)}...
+          </div>
+          <button
+            onClick={() => toggleCellExpand(cellId)}
+            className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
+          >
+            <ChevronDown className="w-3 h-3" />
+            Show more
+          </button>
+        </div>
+      )
+    }
+    
+    if (isLongText && isExpanded) {
+      return (
+        <div>
+          <div className="text-gray-200 text-sm leading-relaxed break-words" style={{ wordBreak: 'break-word' }}>
+            {stringValue}
+          </div>
+          <button
+            onClick={() => toggleCellExpand(cellId)}
+            className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 mt-1"
+          >
+            <ChevronUp className="w-3 h-3" />
+            Show less
+          </button>
         </div>
       )
     }
@@ -412,14 +577,23 @@ export default function CreateTestCasesPage() {
   return (
     <div className="min-h-screen w-full bg-gray-950 p-6 flex flex-col">
       {/* Header - Fixed */}
-      <div className="flex items-center gap-4 mb-4 flex-shrink-0">
-        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500 to-purple-600 flex items-center justify-center shadow-lg shadow-purple-500/20">
-          <ClipboardList className="w-6 h-6 text-white" />
+      <div className="flex items-center justify-between mb-4 flex-shrink-0">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500 to-purple-600 flex items-center justify-center shadow-lg shadow-purple-500/20">
+            <ClipboardList className="w-6 h-6 text-white" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-white">Create Test Case</h1>
+            <p className="text-gray-400 text-sm">Generate AI-powered test cases with customizable templates</p>
+          </div>
         </div>
-        <div>
-          <h1 className="text-2xl font-bold text-white">Create Test Case</h1>
-          <p className="text-gray-400 text-sm">Generate AI-powered test cases with customizable templates</p>
-        </div>
+        <button
+          onClick={() => setIsHistoryModalOpen(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-gray-300 hover:text-white transition-all"
+        >
+          <History className="w-4 h-4" />
+          <span>View History</span>
+        </button>
       </div>
 
       {/* Main Content Area - Takes remaining height */}
@@ -478,19 +652,39 @@ export default function CreateTestCasesPage() {
 
             {/* Test Case Name */}
             <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4">
-              <label className="text-sm font-medium text-gray-300 mb-2 block">Test Case Name</label>
+              <label className="text-sm font-medium text-gray-300 mb-2 block">Test Case Name <span className="text-red-400">*</span></label>
               <input
                 type="text"
                 value={testCaseName}
                 onChange={(e) => setTestCaseName(e.target.value)}
                 placeholder="e.g., User Login Flow Test"
-                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-cyan-500"
+                className={`w-full px-3 py-2 bg-gray-800 border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-cyan-500 ${
+                  testCaseName.trim() ? 'border-emerald-500/50' : 'border-gray-700'
+                }`}
               />
             </div>
 
+            {/* Input Validation Notice */}
+            {(!testContent.trim() && !uploadedFile) && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+                <div className="w-5 h-5 rounded-full bg-amber-500/20 flex items-center justify-center flex-shrink-0">
+                  <span className="text-amber-400 text-xs font-bold">!</span>
+                </div>
+                <p className="text-amber-400 text-xs">
+                  Please provide either a <span className="font-semibold">Test Description</span> or <span className="font-semibold">Upload a File</span> to generate test cases.
+                </p>
+              </div>
+            )}
+
             {/* Test Description */}
-            <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-6">
-              <label className="text-sm font-medium text-gray-300 mb-3 block">Test Description <span className="text-gray-500 text-xs">(required if no file uploaded)</span></label>
+            <div className={`bg-gray-900/50 border rounded-xl p-6 transition-all ${
+              testContent.trim() ? 'border-emerald-500/50' : (!testContent.trim() && !uploadedFile) ? 'border-amber-500/30' : 'border-gray-800'
+            }`}>
+              <label className="text-sm font-medium text-gray-300 mb-3 block">
+                Test Description 
+                <span className="text-gray-500 text-xs ml-1">(required if no file uploaded)</span>
+                {testContent.trim() && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 inline ml-2" />}
+              </label>
               <textarea
                 value={testContent}
                 onChange={(e) => setTestContent(e.target.value)}
@@ -499,32 +693,71 @@ export default function CreateTestCasesPage() {
                   : 'Describe the API test scenario...'
                 }
                 rows={6}
-                className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-cyan-500 resize-y min-h-[120px]"
+                className={`w-full px-4 py-3 bg-gray-800 border rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-cyan-500 resize-y min-h-[120px] ${
+                  testContent.trim() ? 'border-emerald-500/50' : 'border-gray-700'
+                }`}
               />
             </div>
 
+            {/* OR Divider */}
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-px bg-gray-700"></div>
+              <span className="text-gray-500 text-xs font-medium uppercase">or</span>
+              <div className="flex-1 h-px bg-gray-700"></div>
+            </div>
+
             {/* Upload File */}
-            <div className="bg-gray-900/50 border border-gray-800 rounded-xl p-4">
-              <label className="text-sm font-medium text-gray-300 mb-2 block">Upload File <span className="text-gray-500 text-xs">(required if no description provided)</span></label>
+            <div className={`bg-gray-900/50 border rounded-xl p-4 transition-all ${
+              uploadedFile ? 'border-emerald-500/50' : (!testContent.trim() && !uploadedFile) ? 'border-amber-500/30' : 'border-gray-800'
+            }`}>
+              <label className="text-sm font-medium text-gray-300 mb-2 block">
+                Upload File 
+                <span className="text-gray-500 text-xs ml-1">(required if no description provided)</span>
+                {uploadedFile && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 inline ml-2" />}
+              </label>
               {uploadedFile ? (
-                <div className="flex items-center justify-between p-2 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span className="text-xs text-emerald-400 truncate max-w-[200px]">{uploadedFile.name}</span>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between p-2 bg-emerald-500/10 border border-emerald-500/30 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      <span className="text-xs text-emerald-400 truncate max-w-[200px]">{uploadedFile.name}</span>
+                      <span className="text-xs text-gray-500">({(uploadedFile.size / 1024).toFixed(1)} KB)</span>
+                    </div>
+                    <button onClick={removeFile} className="p-1 hover:bg-gray-700 rounded">
+                      <X className="w-3 h-3 text-gray-400" />
+                    </button>
                   </div>
-                  <button onClick={removeFile} className="p-1 hover:bg-gray-700 rounded">
-                    <X className="w-3 h-3 text-gray-400" />
-                  </button>
+                  {/* File Content Preview */}
+                  {uploadedFileContent && uploadedFileContent.length > 0 && !uploadedFileContent.startsWith('File uploaded:') && (
+                    <div className="mt-2 p-2 bg-gray-800/50 border border-gray-700 rounded-lg">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs text-gray-400">Content Preview</span>
+                        <span className="text-xs text-gray-500">{uploadedFileContent.length.toLocaleString()} chars</span>
+                      </div>
+                      <pre className="text-xs text-gray-300 font-mono max-h-24 overflow-auto whitespace-pre-wrap break-words">
+                        {uploadedFileContent.substring(0, 500)}{uploadedFileContent.length > 500 ? '...' : ''}
+                      </pre>
+                    </div>
+                  )}
                 </div>
               ) : (
-                <label className="flex items-center justify-center gap-2 p-3 border border-dashed border-gray-700 rounded-lg cursor-pointer hover:border-gray-600 transition-all">
-                  <Upload className="w-4 h-4 text-gray-500" />
-                  <span className="text-sm text-gray-400">Click to upload</span>
+                <label className={`flex flex-col items-center justify-center gap-2 p-4 border border-dashed rounded-lg cursor-pointer hover:border-gray-600 transition-all ${
+                  (!testContent.trim() && !uploadedFile) ? 'border-amber-500/30' : 'border-gray-700'
+                }`}>
+                  <Upload className="w-5 h-5 text-gray-500" />
+                  <span className="text-sm text-gray-400">Click to upload a file</span>
+                  <span className="text-xs text-gray-500">
+                    {testType === 'ui' 
+                      ? 'Supports: .txt, .md, .json, .csv, .yaml, .yml, .doc, .docx' 
+                      : 'Supports: .json, .yaml, .yml, .txt, .md, .js, .ts'}
+                  </span>
                   <input
                     type="file"
                     className="hidden"
                     onChange={handleFileUpload}
-                    accept={testType === 'ui' ? '.doc,.docx,.pdf,.png,.jpg,.jpeg,.md,.txt' : '.json,.js,.txt'}
+                    accept={testType === 'ui' 
+                      ? '.txt,.md,.json,.csv,.yaml,.yml,.doc,.docx' 
+                      : '.json,.yaml,.yml,.txt,.md,.js,.ts'}
                   />
                 </label>
               )}
@@ -587,27 +820,33 @@ export default function CreateTestCasesPage() {
 
                 {/* Table with Internal Scroll */}
                 <div className="flex-1 overflow-auto">
-                  <table className="w-full border-collapse table-fixed">
+                  <table className="w-full border-collapse" style={{ tableLayout: 'auto' }}>
                     <thead className="sticky top-0 z-10">
                       <tr className="bg-gray-800">
-                        <th className="w-10 px-3 py-2 text-left border-b border-gray-700 bg-gray-800">
-                          <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider whitespace-nowrap">
+                        <th className="px-3 py-3 text-left border-b border-gray-700 bg-gray-800" style={{ minWidth: '50px', width: '50px' }}>
+                          <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">
                             #
                           </span>
                         </th>
                         {currentTemplateFields
                           .filter(field => selectedFields.has(field.key))
                           .map((field) => {
-                            // Dynamic column widths based on field type
-                            const getColumnWidth = (key: string) => {
-                              if (key === 'testCaseId' || key === 'httpMethod' || key === 'status' || key === 'priority' || key === 'severity' || key === 'expectedStatusCode') return 'w-28'
-                              if (key === 'endpointUrl' || key === 'apiName' || key === 'testCaseTitle' || key === 'featureName') return 'w-48'
-                              if (key === 'requestPayload' || key === 'requestHeaders' || key === 'expectedResponseBody' || key === 'testSteps' || key === 'expectedResult') return 'w-64'
-                              return 'w-40'
+                            // Dynamic min-width based on field type
+                            const getMinWidth = (key: string) => {
+                              if (key === 'testCaseId') return '120px'
+                              if (key === 'httpMethod' || key === 'status' || key === 'priority' || key === 'severity' || key === 'expectedStatusCode') return '100px'
+                              if (key === 'endpointUrl' || key === 'apiName' || key === 'testCaseTitle' || key === 'featureName') return '180px'
+                              if (key === 'requestPayload' || key === 'requestHeaders' || key === 'expectedResponseBody') return '220px'
+                              if (key === 'testSteps' || key === 'expectedResult' || key === 'preconditions') return '250px'
+                              return '140px'
                             }
                             return (
-                              <th key={field.key} className={`${getColumnWidth(field.key)} px-3 py-2 text-left border-b border-gray-700 bg-gray-800`}>
-                                <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider whitespace-nowrap">
+                              <th 
+                                key={field.key} 
+                                className="px-3 py-3 text-left border-b border-gray-700 bg-gray-800"
+                                style={{ minWidth: getMinWidth(field.key) }}
+                              >
+                                <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider" style={{ whiteSpace: 'normal', wordWrap: 'break-word' }}>
                                   {field.label}
                                 </span>
                               </th>
@@ -618,7 +857,7 @@ export default function CreateTestCasesPage() {
                     <tbody>
                       {generatedTestCases.map((testCase, index) => (
                         <tr key={index} className={`${index % 2 === 0 ? 'bg-gray-900/30' : 'bg-gray-900/50'} hover:bg-gray-800/50 transition-colors`}>
-                          <td className="w-10 px-3 py-3 border-b border-gray-800/50 align-top">
+                          <td className="px-3 py-3 border-b border-gray-800/50 align-top" style={{ minWidth: '50px', width: '50px' }}>
                             <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gray-700 text-xs text-gray-300 font-medium">{index + 1}</span>
                           </td>
                           {currentTemplateFields
@@ -626,10 +865,12 @@ export default function CreateTestCasesPage() {
                             .map((field) => {
                               const value = testCase[field.key]
                               return (
-                                <td key={field.key} className="px-3 py-3 border-b border-gray-800/50 align-top">
-                                  <div className="overflow-hidden">
-                                    {renderTableCellValue(field.key, value)}
-                                  </div>
+                                <td 
+                                  key={field.key} 
+                                  className="px-3 py-3 border-b border-gray-800/50 align-top"
+                                  style={{ overflowWrap: 'break-word', wordBreak: 'break-word' }}
+                                >
+                                  {renderTableCellValue(field.key, value, index)}
                                 </td>
                               )
                             })}
@@ -752,6 +993,13 @@ export default function CreateTestCasesPage() {
             </div>
         </div>
       </div>
+
+      {/* Test Case History Modal */}
+      <TestCaseHistoryModal
+        isOpen={isHistoryModalOpen}
+        onClose={() => setIsHistoryModalOpen(false)}
+        onLoadTestCases={handleLoadFromHistory}
+      />
     </div>
   )
 }

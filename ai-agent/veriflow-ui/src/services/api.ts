@@ -175,14 +175,18 @@ class ApiClient {
     return this.request<{ user: any }>(`/api/users/${userId}`)
   }
 
-  async createUser(username: string, email: string, password: string, role: string = 'user') {
+  async getModules() {
+    return this.request<{ modules: any[] }>('/api/users/modules')
+  }
+
+  async createUser(username: string, email: string, password: string, role: string = 'user', moduleIds: number[] = []) {
     return this.request<{ user: any; message: string }>('/api/users', {
       method: 'POST',
-      body: { username, email, password, role },
+      body: { username, email, password, role, moduleIds },
     })
   }
 
-  async updateUser(userId: string, data: { username?: string; email?: string; password?: string; role?: string }) {
+  async updateUser(userId: string, data: { username?: string; email?: string; password?: string; role?: string; moduleIds?: number[] }) {
     return this.request<{ user: any; message: string }>(`/api/users/${userId}`, {
       method: 'PUT',
       body: data,

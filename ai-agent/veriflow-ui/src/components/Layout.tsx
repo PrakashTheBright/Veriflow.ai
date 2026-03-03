@@ -4,18 +4,27 @@ import {
   LayoutDashboard, Globe, Cpu, FileText, Settings, 
   LogOut, Sparkles, ChevronRight, Menu, X, Server, Users, FilePlus 
 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useAuthStore } from '../store/authStore'
 import toast from 'react-hot-toast'
 
-const baseNavItems = [
+// Map module names to their corresponding navigation items
+const moduleNavigation: Record<string, { path: string; icon: any; label: string; exact?: boolean }> = {
+  'Dashboard': { path: '/app', icon: LayoutDashboard, label: 'Dashboard', exact: true },
+  'UI Testing': { path: '/app/ui-testing', icon: Globe, label: 'UI Testing' },
+  'API Testing': { path: '/app/api-testing', icon: Cpu, label: 'API Testing' },
+  'Reports': { path: '/app/reports', icon: FileText, label: 'Reports' },
+  'Create Test Cases': { path: '/app/create-testcases', icon: FilePlus, label: 'Create Test Cases' },
+  'Users': { path: '/app/users', icon: Users, label: 'Users' },
+  'Environments': { path: '/app/environments', icon: Server, label: 'Environments' },
+}
+
+// Fallback items for admin or when no modules are assigned
+const allNavItems = [
   { path: '/app', icon: LayoutDashboard, label: 'Dashboard', exact: true },
   { path: '/app/ui-testing', icon: Globe, label: 'UI Testing' },
   { path: '/app/api-testing', icon: Cpu, label: 'API Testing' },
   { path: '/app/reports', icon: FileText, label: 'Reports' },
-]
-
-const adminNavItems = [
   { path: '/app/create-testcases', icon: FilePlus, label: 'Create Test Cases' },
   { path: '/app/users', icon: Users, label: 'Users' },
   { path: '/app/environments', icon: Server, label: 'Environments' },
@@ -30,7 +39,36 @@ export default function Layout() {
 
   // Check if user is admin
   const isAdmin = user?.role === 'admin' || user?.email === 'admin@veriflow.ai' || user?.username === 'admin'
-  const navItems = isAdmin ? [...baseNavItems, ...adminNavItems] : baseNavItems
+  
+  // Build navigation items based on user's assigned modules
+  const navItems = useMemo(() => {
+    // If admin or no modules assigned, show all items
+    if (isAdmin) {
+      return allNavItems
+    }
+
+    // If user has modules, filter navigation based on assigned modules
+    if (user?.modules && user.modules.length > 0) {
+      const userNavItems: typeof allNavItems = []
+      
+      // Sort by display_order if available
+      const sortedModules = [...user.modules].sort((a, b) => 
+        (a.display_order || 0) - (b.display_order || 0)
+      )
+      
+      for (const module of sortedModules) {
+        const navItem = moduleNavigation[module.name]
+        if (navItem) {
+          userNavItems.push(navItem)
+        }
+      }
+      
+      return userNavItems
+    }
+
+    // Fallback: show only Dashboard
+    return [{ path: '/app', icon: LayoutDashboard, label: 'Dashboard', exact: true }]
+  }, [user?.modules, isAdmin])
 
   const handleLogout = () => {
     logout()

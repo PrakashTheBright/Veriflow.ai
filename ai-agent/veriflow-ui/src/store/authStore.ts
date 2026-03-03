@@ -2,12 +2,21 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { api } from '../services/api'
 
+interface UserModule {
+  id: number
+  name: string
+  path: string
+  icon?: string
+  display_order?: number
+}
+
 interface User {
   id: string
   username: string
   email: string
   role?: string
   createdAt: string
+  modules?: UserModule[]
 }
 
 interface AuthState {
