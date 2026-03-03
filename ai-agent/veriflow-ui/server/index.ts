@@ -11,8 +11,10 @@ import testRoutes from './routes/tests'
 import reportRoutes from './routes/reports'
 import userRoutes from './routes/users'
 import testCaseRoutes from './routes/testcases'
+import testcaseHistoryRoutes from './routes/testcaseHistory'
 import { initDatabase } from './database/init'
 import { autoCleanup } from './utils/cleanup'
+import { checkModuleAccess } from './middleware/moduleAccess'
 
 // Load environment variables from both ai-agent/.env and veriflow-ui/.env
 dotenv.config({ path: path.join(__dirname, '../../.env') }) // ai-agent/.env (primary)
@@ -49,10 +51,11 @@ app.set('io', io)
 
 // Routes
 app.use('/api/auth', authRoutes)
-app.use('/api/tests', testRoutes)
-app.use('/api/reports', reportRoutes)
-app.use('/api/users', userRoutes)
-app.use('/api/testcases', testCaseRoutes)
+app.use('/api/tests', checkModuleAccess, testRoutes)
+app.use('/api/reports', checkModuleAccess, reportRoutes)
+app.use('/api/users', checkModuleAccess, userRoutes)
+app.use('/api/testcases', checkModuleAccess, testCaseRoutes)
+app.use('/api/testcase-history', checkModuleAccess, testcaseHistoryRoutes)
 
 // Health check
 app.get('/api/health', (req, res) => {

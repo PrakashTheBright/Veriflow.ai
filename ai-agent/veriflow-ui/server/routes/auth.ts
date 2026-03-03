@@ -106,6 +106,16 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid username or password' })
     }
 
+    // Get user's assigned modules
+    const modulesResult = await pool.query(
+      `SELECT m.id, m.name, m.path, m.icon, m.display_order 
+       FROM user_modules um 
+       JOIN modules m ON um.module_id = m.id 
+       WHERE um.user_id = $1 AND m.is_active = true
+       ORDER BY m.display_order`,
+      [user.id]
+    )
+
     // Generate token
     const token = jwt.sign(
       { userId: user.id, username: user.username },
@@ -128,6 +138,7 @@ router.post('/login', async (req, res) => {
         email: user.email,
         role: user.role,
         createdAt: user.created_at,
+        modules: modulesResult.rows,
       },
       token,
     })
@@ -177,7 +188,7 @@ router.get('/verify', async (req, res) => {
 
     // Get user
     const user = await pool.query(
-      'SELECT id, username, email, created_at FROM users WHERE id = $1',
+      'SELECT id, username, email, role, created_at FROM users WHERE id = $1',
       [decoded.userId]
     )
 
@@ -185,7 +196,22 @@ router.get('/verify', async (req, res) => {
       return res.status(401).json({ message: 'User not found' })
     }
 
-    res.json({ user: user.rows[0] })
+    // Get user's assigned modules
+    const modulesResult = await pool.query(
+      `SELECT m.id, m.name, m.path, m.icon, m.display_order 
+       FROM user_modules um 
+       JOIN modules m ON um.module_id = m.id 
+       WHERE um.user_id = $1 AND m.is_active = true
+       ORDER BY m.display_order`,
+      [decoded.userId]
+    )
+
+    res.json({ 
+      user: {
+        ...user.rows[0],
+        modules: modulesResult.rows
+      }
+    })
   } catch (error) {
     console.error('Verify error:', error)
     res.status(401).json({ message: 'Invalid token' })

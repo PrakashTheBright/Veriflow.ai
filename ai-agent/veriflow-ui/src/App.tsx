@@ -11,6 +11,7 @@ import EnvironmentsPage from './pages/EnvironmentsPage'
 import UsersPage from './pages/UsersPage'
 import CreateTestCasesPage from './pages/CreateTestCasesPage'
 import Layout from './components/Layout'
+import ModuleProtectedRoute from './components/ModuleProtectedRoute'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -34,13 +35,41 @@ function App() {
           <Layout />
         </ProtectedRoute>
       }>
-        <Route index element={<Dashboard />} />
-        <Route path="ui-testing" element={<UITestingPage />} />
-        <Route path="api-testing" element={<APITestingPage />} />
-        <Route path="reports" element={<ReportsPage />} />
-        <Route path="create-testcases" element={<CreateTestCasesPage />} />
-        <Route path="environments" element={<EnvironmentsPage />} />
-        <Route path="users" element={<UsersPage />} />
+        <Route index element={
+          <ModuleProtectedRoute moduleName="Dashboard">
+            <Dashboard />
+          </ModuleProtectedRoute>
+        } />
+        <Route path="ui-testing" element={
+          <ModuleProtectedRoute moduleName="UI Testing">
+            <UITestingPage />
+          </ModuleProtectedRoute>
+        } />
+        <Route path="api-testing" element={
+          <ModuleProtectedRoute moduleName="API Testing">
+            <APITestingPage />
+          </ModuleProtectedRoute>
+        } />
+        <Route path="reports" element={
+          <ModuleProtectedRoute moduleName="Reports">
+            <ReportsPage />
+          </ModuleProtectedRoute>
+        } />
+        <Route path="create-testcases" element={
+          <ModuleProtectedRoute moduleName="Create Test Cases">
+            <CreateTestCasesPage />
+          </ModuleProtectedRoute>
+        } />
+        <Route path="environments" element={
+          <ModuleProtectedRoute moduleName="Environments">
+            <EnvironmentsPage />
+          </ModuleProtectedRoute>
+        } />
+        <Route path="users" element={
+          <ModuleProtectedRoute moduleName="Users">
+            <UsersPage />
+          </ModuleProtectedRoute>
+        } />
       </Route>
       
       <Route path="*" element={<Navigate to="/" replace />} />

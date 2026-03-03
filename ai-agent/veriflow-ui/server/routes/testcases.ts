@@ -16,6 +16,7 @@ interface GenerateTestCaseRequest {
   testType: 'ui' | 'api'
   testContent: string
   uploadedFileName?: string
+  uploadedFileContent?: string
   selectedFields?: string[]
 }
 
@@ -68,19 +69,68 @@ const API_FIELD_KEYS: Record<string, string> = {
 // Generate test case using Groq AI
 router.post('/generate', async (req: Request, res: Response) => {
   try {
-    const { testCaseName, testType, testContent, uploadedFileName, selectedFields }: GenerateTestCaseRequest = req.body
+    const { testCaseName, testType, testContent, uploadedFileName, uploadedFileContent, selectedFields }: GenerateTestCaseRequest = req.body
 
-    if (!testCaseName || !testContent) {
+    if (!testCaseName) {
       return res.status(400).json({ 
-        message: 'Test case name and content are required' 
+        message: 'Test case name is required' 
+      })
+    }
+    
+    // Check if either description or file is provided
+    const hasContent = testContent && testContent.trim().length > 0
+    const hasFileContent = uploadedFileContent && uploadedFileContent.trim().length > 0 && !uploadedFileContent.startsWith('[Binary file')
+    const hasFileName = uploadedFileName && uploadedFileName.trim().length > 0
+    
+    console.log('=== Content Analysis ===')
+    console.log('testContent length:', testContent?.length || 0)
+    console.log('uploadedFileContent length:', uploadedFileContent?.length || 0)
+    console.log('hasContent:', hasContent)
+    console.log('hasFileContent:', hasFileContent)
+    console.log('hasFileName:', hasFileName)
+    
+    if (!hasContent && !hasFileContent) {
+      return res.status(400).json({ 
+        message: 'Either test description or uploaded file content is required' 
       })
     }
 
-    // Create prompt based on test type and selected fields
-    const prompt = createDynamicPrompt(testCaseName, testType, testContent, uploadedFileName, selectedFields)
+    // Build content for prompt - combine all available content
+    let contentForPrompt = ''
+    
+    // Add manual description if provided
+    if (hasContent && testContent !== uploadedFileContent) {
+      contentForPrompt = `User Description:\n${testContent}`
+    }
+    
+    // Add file content if provided and different from testContent
+    if (hasFileContent) {
+      if (contentForPrompt) {
+        contentForPrompt += `\n\n--- Uploaded File Content (${uploadedFileName || 'file'}) ---\n${uploadedFileContent}`
+      } else {
+        contentForPrompt = `Content from uploaded file (${uploadedFileName || 'file'}):\n${uploadedFileContent}`
+      }
+    } else if (hasContent && !hasFileContent) {
+      // Just use testContent which might already be the file content sent from frontend
+      contentForPrompt = testContent
+    }
+    
+    console.log('Final content length for prompt:', contentForPrompt.length)
+    console.log('First 200 chars of content:', contentForPrompt.substring(0, 200))
 
-    console.log('Generating test case with Groq AI...')
-    console.log('Selected fields:', selectedFields)
+    // Create prompt based on test type and selected fields
+    const prompt = createDynamicPrompt(testCaseName, testType, contentForPrompt, uploadedFileName, selectedFields)
+
+    console.log('=== Test Case Generation Request ===')
+    console.log('Test Case Name:', testCaseName)
+    console.log('Test Type:', testType)
+    console.log('Has Direct Content:', hasContent)
+    console.log('Has File Content:', hasFileContent)
+    console.log('Uploaded File Name:', uploadedFileName || 'None')
+    console.log('Content Length:', contentForPrompt.length)
+    console.log('Selected Fields:', selectedFields)
+    console.log('Content Preview (first 500 chars):', contentForPrompt.substring(0, 500))
+    console.log('=====================================')
     
     // Call Groq API
     const completion = await groq.chat.completions.create({
@@ -207,6 +257,10 @@ function createDynamicPrompt(
   if (testType === 'ui') {
     return `You are a Senior QA Automation Architect.
 
+CRITICAL: You MUST carefully read and analyze ALL the content provided below.
+The content may include user descriptions, uploaded file content (JSON, specs, API docs, etc.).
+Extract ALL testable scenarios from this content and generate comprehensive test cases.
+
 Analyze the provided feature requirements and generate a COMPREHENSIVE set of UI test cases.
 Dynamically determine the appropriate number of test cases based on:
 - Complexity of the feature
@@ -221,10 +275,15 @@ Generate test cases to cover ALL of the following (as applicable):
 5. UI state variations (loading, disabled, read-only states)
 6. User permission scenarios (if applicable)
 
-INPUT:
-Feature Name: ${testCaseName}
-Requirement Description: ${testContent}
-${uploadedFileName ? `Referenced File: ${uploadedFileName}` : ''}
+=== CONTENT TO ANALYZE (READ CAREFULLY) ===
+Feature/Test Case Name: ${testCaseName}
+${uploadedFileName ? `Source File: ${uploadedFileName}\n` : ''}
+--- BEGIN CONTENT ---
+${testContent}
+--- END CONTENT ---
+===========================================
+
+Generate test cases based on the ENTIRE content above.
 
 SELECTED FIELDS TO GENERATE FOR EACH TEST CASE:
 ${fieldsToGenerate.map((f, i) => `${i + 1}. ${f}`).join('\n')}
@@ -270,6 +329,10 @@ RULES:
   } else {
     return `You are an expert API QA Architect.
 
+CRITICAL: You MUST carefully read and analyze ALL the content provided below.
+The content may include API specifications, Swagger/OpenAPI docs, requirements documents, or JSON payloads.
+Extract ALL testable API scenarios from this content and generate comprehensive test cases.
+
 Analyze the provided API requirements and generate a COMPREHENSIVE set of API test cases.
 Dynamically determine the appropriate number of test cases based on:
 - API complexity and number of parameters
@@ -287,10 +350,15 @@ Generate test cases to cover ALL of the following (as applicable):
 8. Edge cases (empty arrays, null values, special characters, max lengths)
 9. Security scenarios (injection attempts, XSS, unauthorized access)
 
-INPUT:
-API Name: ${testCaseName}
-Requirement Description: ${testContent}
-${uploadedFileName ? `Referenced File: ${uploadedFileName}` : ''}
+=== CONTENT TO ANALYZE (READ CAREFULLY) ===
+API/Test Case Name: ${testCaseName}
+${uploadedFileName ? `Source File: ${uploadedFileName}\n` : ''}
+--- BEGIN CONTENT ---
+${testContent}
+--- END CONTENT ---
+===========================================
+
+Generate test cases based on the ENTIRE content above. If the content includes API definitions, endpoints, or request/response examples, use them to create specific test cases.
 
 SELECTED FIELDS TO GENERATE FOR EACH TEST CASE:
 ${fieldsToGenerate.map((f, i) => `${i + 1}. ${f}`).join('\n')}

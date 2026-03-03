@@ -2,10 +2,16 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Users as UsersIcon, Plus, Edit2, Trash2, X, Save, 
-  Mail, Lock, User as UserIcon, Shield, Search, Eye, EyeOff 
+  Mail, Lock, User as UserIcon, Shield, Search, Eye, EyeOff, Layers 
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { api } from '../services/api'
+
+interface UserModule {
+  id: number
+  name: string
+  path: string
+}
 
 interface User {
   id: string
@@ -14,10 +20,21 @@ interface User {
   role: string
   created_at: string
   updated_at: string
+  modules?: UserModule[]
+}
+
+interface Module {
+  id: number
+  name: string
+  path: string
+  icon: string
+  description: string
+  display_order: number
 }
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
+  const [modules, setModules] = useState<Module[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
@@ -29,12 +46,23 @@ export default function UsersPage() {
     email: '',
     password: '',
     confirmPassword: '',
-    role: 'user'
+    role: 'user',
+    selectedModuleIds: [] as number[]
   })
 
   useEffect(() => {
     fetchUsers()
+    fetchModules()
   }, [])
+
+  const fetchModules = async () => {
+    try {
+      const response = await api.getModules()
+      setModules(response.modules)
+    } catch (error: any) {
+      console.error('Failed to fetch modules:', error)
+    }
+  }
 
   const fetchUsers = async () => {
     try {
@@ -59,8 +87,13 @@ export default function UsersPage() {
       return
     }
 
+    if (formData.selectedModuleIds.length === 0) {
+      toast.error('Please select at least one module')
+      return
+    }
+
     try {
-      await api.createUser(formData.username, formData.email, formData.password, formData.role)
+      await api.createUser(formData.username, formData.email, formData.password, formData.role, formData.selectedModuleIds)
       toast.success('User created successfully')
       setShowAddModal(false)
       resetForm()
@@ -78,10 +111,16 @@ export default function UsersPage() {
       return
     }
 
+    if (formData.selectedModuleIds.length === 0) {
+      toast.error('Please select at least one module')
+      return
+    }
+
     const updateData: any = {
       username: formData.username,
       email: formData.email,
       role: formData.role,
+      moduleIds: formData.selectedModuleIds,
     }
 
     if (formData.password) {
@@ -119,7 +158,8 @@ export default function UsersPage() {
       email: '',
       password: '',
       confirmPassword: '',
-      role: 'user'
+      role: 'user',
+      selectedModuleIds: []
     })
     setShowPassword(false)
     setShowConfirmPassword(false)
@@ -132,10 +172,34 @@ export default function UsersPage() {
       email: user.email,
       password: '',
       confirmPassword: '',
-      role: user.role
+      role: user.role,
+      selectedModuleIds: user.modules?.map(m => m.id) || []
     })
     setShowPassword(false)
     setShowConfirmPassword(false)
+  }
+
+  const toggleModuleSelection = (moduleId: number) => {
+    setFormData(prev => ({
+      ...prev,
+      selectedModuleIds: prev.selectedModuleIds.includes(moduleId)
+        ? prev.selectedModuleIds.filter(id => id !== moduleId)
+        : [...prev.selectedModuleIds, moduleId]
+    }))
+  }
+
+  const selectAllModules = () => {
+    setFormData(prev => ({
+      ...prev,
+      selectedModuleIds: modules.map(m => m.id)
+    }))
+  }
+
+  const deselectAllModules = () => {
+    setFormData(prev => ({
+      ...prev,
+      selectedModuleIds: []
+    }))
   }
 
   const closeModal = () => {
@@ -208,6 +272,7 @@ export default function UsersPage() {
                     <th className="text-left px-6 py-4 text-dark-400 font-medium text-sm">Username</th>
                     <th className="text-left px-6 py-4 text-dark-400 font-medium text-sm">Email</th>
                     <th className="text-left px-6 py-4 text-dark-400 font-medium text-sm">Role</th>
+                    <th className="text-left px-6 py-4 text-dark-400 font-medium text-sm">Modules</th>
                     <th className="text-left px-6 py-4 text-dark-400 font-medium text-sm">Created</th>
                     <th className="text-right px-6 py-4 text-dark-400 font-medium text-sm">Actions</th>
                   </tr>
@@ -240,6 +305,28 @@ export default function UsersPage() {
                           {user.role === 'admin' && <Shield className="w-3 h-3" />}
                           {user.role}
                         </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-wrap gap-1 max-w-xs">
+                          {user.modules && user.modules.length > 0 ? (
+                            user.modules.slice(0, 3).map((module) => (
+                              <span
+                                key={module.id}
+                                className="px-2 py-0.5 bg-neon-blue/10 text-neon-blue border border-neon-blue/20 rounded text-xs"
+                                title={module.name}
+                              >
+                                {module.name}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-dark-500 text-sm">No modules</span>
+                          )}
+                          {user.modules && user.modules.length > 3 && (
+                            <span className="px-2 py-0.5 bg-dark-700 text-dark-300 border border-white/10 rounded text-xs">
+                              +{user.modules.length - 3} more
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4 text-dark-300 text-sm">
                         {new Date(user.created_at).toLocaleDateString()}
@@ -394,6 +481,61 @@ export default function UsersPage() {
                       <option value="admin">Admin</option>
                     </select>
                   </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium text-dark-300 flex items-center gap-2">
+                      <Layers className="w-4 h-4" />
+                      Module Access
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={selectAllModules}
+                        className="text-xs text-neon-blue hover:text-neon-cyan transition-colors"
+                      >
+                        Select All
+                      </button>
+                      <span className="text-dark-500">|</span>
+                      <button
+                        type="button"
+                        onClick={deselectAllModules}
+                        className="text-xs text-dark-400 hover:text-white transition-colors"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  <div className="bg-dark-800 border border-white/10 rounded-xl p-3 max-h-48 overflow-y-auto">
+                    <div className="grid grid-cols-1 gap-2">
+                      {modules.map((module) => (
+                        <label
+                          key={module.id}
+                          className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors ${
+                            formData.selectedModuleIds.includes(module.id)
+                              ? 'bg-neon-blue/10 border border-neon-blue/30'
+                              : 'hover:bg-white/5 border border-transparent'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={formData.selectedModuleIds.includes(module.id)}
+                            onChange={() => toggleModuleSelection(module.id)}
+                            className="w-4 h-4 rounded border-dark-500 bg-dark-700 text-neon-blue focus:ring-neon-blue/50"
+                          />
+                          <span className={`text-sm ${
+                            formData.selectedModuleIds.includes(module.id) ? 'text-white' : 'text-dark-300'
+                          }`}>
+                            {module.name}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="text-xs text-dark-500 mt-2">
+                    {formData.selectedModuleIds.length} of {modules.length} modules selected
+                  </p>
                 </div>
               </div>
 

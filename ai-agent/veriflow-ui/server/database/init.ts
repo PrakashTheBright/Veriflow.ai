@@ -83,6 +83,44 @@ export async function initDatabase() {
       )
     `)
 
+    // Create modules table - defines all available modules in the system
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS modules (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name VARCHAR(100) UNIQUE NOT NULL,
+        path VARCHAR(255) NOT NULL,
+        icon VARCHAR(100),
+        description VARCHAR(500),
+        display_order INTEGER DEFAULT 0,
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+
+    // Create user_modules table - maps users to their accessible modules
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_modules (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        module_id UUID REFERENCES modules(id) ON DELETE CASCADE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, module_id)
+      )
+    `)
+
+    // Insert default modules if not exist
+    await client.query(`
+      INSERT INTO modules (name, path, icon, description, display_order) VALUES
+        ('Dashboard', '/app', 'LayoutDashboard', 'Main dashboard with overview and statistics', 1),
+        ('UI Testing', '/app/ui-testing', 'Globe', 'Execute and manage UI automation tests', 2),
+        ('API Testing', '/app/api-testing', 'Cpu', 'Execute and manage API tests', 3),
+        ('Reports', '/app/reports', 'FileText', 'View test execution reports and analytics', 4),
+        ('Create Test Cases', '/app/create-testcases', 'FilePlus', 'Generate AI-powered test cases', 5),
+        ('Users', '/app/users', 'Users', 'Manage user accounts and permissions', 6),
+        ('Environments', '/app/environments', 'Server', 'Configure testing environments', 7)
+      ON CONFLICT (name) DO NOTHING
+    `)
+
       // Add response_data column to test_executions if it doesn't exist
       await client.query(`
         ALTER TABLE test_executions 
@@ -100,6 +138,22 @@ export async function initDatabase() {
         UPDATE users 
         SET role = 'admin' 
         WHERE email = 'admin@veriflow.ai' OR username = 'admin'
+      `)
+
+      // Grant all modules to admin users
+      await client.query(`
+        INSERT INTO user_modules (user_id, module_id)
+        SELECT u.id, m.id
+        FROM users u
+        CROSS JOIN modules m
+        WHERE u.role = 'admin'
+        ON CONFLICT (user_id, module_id) DO NOTHING
+      `)
+
+      // Create index on user_modules for faster lookup
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS idx_user_modules_user_id 
+        ON user_modules(user_id)
       `)
 
       // Create indexes for better query performance
