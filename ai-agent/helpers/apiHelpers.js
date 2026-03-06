@@ -1,5 +1,9 @@
 const path = require('path');
+
+// Load .env but do NOT override existing environment variables (dotenv default behavior)
+// This allows server-passed environment variables to take precedence
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
+
 const { faker } = require('@faker-js/faker');
 
 // Base URL from environment - required

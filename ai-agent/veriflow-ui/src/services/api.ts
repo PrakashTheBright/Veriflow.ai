@@ -92,12 +92,12 @@ class ApiClient {
     return this.request<{ testCases: any[] }>('/api/tests/api')
   }
 
-  async executeTest(testId: string, type: string, fileName: string, environmentUrl?: string, environmentConfig?: { apiKey?: string; clientId?: string; headers?: Record<string, string>; username?: string; password?: string }) {
+  async executeTest(testId: string, type: string, fileName: string, environmentUrl?: string, environmentConfig?: { apiKey?: string; clientId?: string; headers?: Record<string, string>; username?: string; password?: string }, environmentName?: string) {
     return this.request<{ success: boolean; executionId: string; message: string }>(
       '/api/tests/execute',
       {
         method: 'POST',
-        body: { testId, type, fileName, environmentUrl, environmentConfig },
+        body: { testId, type, fileName, environmentUrl, environmentConfig, environmentName },
       }
     )
   }
