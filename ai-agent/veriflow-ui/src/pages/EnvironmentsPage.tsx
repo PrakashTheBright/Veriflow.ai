@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Server, Plus, Trash2, Edit2, Save, X, Globe, 
-  CheckCircle2, AlertCircle, Loader2, ExternalLink, FileText, Code
+  CheckCircle2, Loader2, ExternalLink, Code
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { api } from '../services/api'
 
 interface Environment {
   id: string
@@ -15,6 +16,9 @@ interface Environment {
   color: string
   icon: string
   isDefault?: boolean
+  // UI-specific configuration
+  username?: string
+  password?: string
   // API-specific configuration
   apiKey?: string
   clientId?: string
@@ -70,8 +74,8 @@ export default function EnvironmentsPage() {
       const stored = localStorage.getItem('veriflow_environments')
       if (stored) {
         const parsed = JSON.parse(stored)
-        // Migrate old data: add 'type' field if missing, fix API URLs, add API credentials
-        const migrated = parsed.map((env: any) => {
+        // Migrate old data: add 'type' field if missing, fix API URLs
+        const migrated = await Promise.all(parsed.map(async (env: any) => {
           const updated = {
             ...env,
             type: env.type || 'ui' // Default to 'ui' if type is missing
@@ -82,108 +86,146 @@ export default function EnvironmentsPage() {
             updated.baseUrl = updated.baseUrl.replace(/\/v3\/?$/, '')
           }
           
-          // Add SIT API credentials if missing or empty
+          // Fetch API credentials from server if missing
           if (updated.name === 'api-sit' && (!updated.apiKey || updated.apiKey === '')) {
-            updated.apiKey = '6ad35d5f-2e5c-4532-b3d6-8a51098e6650'
-            updated.clientId = 'tahud70ter'
-            updated.headers = {
-              'Content-Type': 'application/json',
-              'x-api-key': '6ad35d5f-2e5c-4532-b3d6-8a51098e6650'
-            }
+            try {
+              const creds = await api.getAPICredentials('SIT')
+              updated.apiKey = creds.apiKey
+              updated.clientId = creds.clientId
+              updated.headers = { 'Content-Type': 'application/json', ...creds.headers }
+            } catch { /* Use empty if not configured */ }
           }
           
-          // Add UAT API credentials if missing or empty
           if (updated.name === 'api-uat' && (!updated.apiKey || updated.apiKey === '')) {
-            updated.apiKey = '03527504-5a0d-4791-a956-43fd65bf74cf'
-            updated.clientId = 'lylgr6i80t'
-            updated.headers = {
-              'Content-Type': 'application/json',
-              'x-api-key': '03527504-5a0d-4791-a956-43fd65bf74cf'
-            }
+            try {
+              const creds = await api.getAPICredentials('UAT')
+              updated.apiKey = creds.apiKey
+              updated.clientId = creds.clientId
+              updated.headers = { 'Content-Type': 'application/json', ...creds.headers }
+            } catch { /* Use empty if not configured */ }
           }
           
-          // Add PRODUCTION API credentials if missing or empty
           if (updated.name === 'api-production' && (!updated.apiKey || updated.apiKey === '')) {
-            updated.apiKey = '66348187-c030-41b9-bbe1-8664fefea076'
-            updated.clientId = 'zknqqzn8va'
-            updated.headers = {
-              'Content-Type': 'application/json',
-              'x-api-key': '66348187-c030-41b9-bbe1-8664fefea076'
-            }
+            try {
+              const creds = await api.getAPICredentials('Production')
+              updated.apiKey = creds.apiKey
+              updated.clientId = creds.clientId
+              updated.headers = { 'Content-Type': 'application/json', ...creds.headers }
+            } catch { /* Use empty if not configured */ }
           }
           
-          // Add SIT UI credentials if missing
+          // Fetch UI credentials from server if missing
           if (updated.name === 'sit' && updated.type === 'ui' && !updated.username) {
-            updated.username = 'prismforce_sp_sit@prismforce.ai'
-            updated.password = '@!agent_123'
+            try {
+              const creds = await api.getUICredentials('SIT')
+              updated.username = creds.username
+              updated.password = creds.password
+            } catch { /* Use empty if not configured */ }
           }
           
-          // Add UAT UI credentials if missing
           if (updated.name === 'uat' && updated.type === 'ui' && !updated.username) {
-            updated.username = 'testuser11@gmail.com'
-            updated.password = '@!agent_123'
+            try {
+              const creds = await api.getUICredentials('UAT')
+              updated.username = creds.username
+              updated.password = creds.password
+            } catch { /* Use empty if not configured */ }
           }
           
-          // Add Production UI credentials if missing
           if (updated.name === 'production' && updated.type === 'ui' && !updated.username) {
-            updated.username = 'prismforce_sp_system@prismforce.ai'
-            updated.password = '@!agent_123'
+            try {
+              const creds = await api.getUICredentials('Production')
+              updated.username = creds.username
+              updated.password = creds.password
+            } catch { /* Use empty if not configured */ }
           }
           
           return updated
-        })
+        }))
         setEnvironments(migrated)
         // Save migrated data back to localStorage
         localStorage.setItem('veriflow_environments', JSON.stringify(migrated))
       } else {
+        // Fetch default credentials from server (including baseUrl)
+        let sitApiCreds = { baseUrl: '', apiKey: '', clientId: '', headers: {} }
+        let uatApiCreds = { baseUrl: '', apiKey: '', clientId: '', headers: {} }
+        let prodApiCreds = { baseUrl: '', apiKey: '', clientId: '', headers: {} }
+        let sitUiCreds = { appUrl: '', username: '', password: '' }
+        let uatUiCreds = { appUrl: '', username: '', password: '' }
+        let prodUiCreds = { appUrl: '', username: '', password: '' }
+        
+        try { 
+          const c = await api.getAPICredentials('SIT')
+          sitApiCreds = { baseUrl: c.baseUrl, apiKey: c.apiKey, clientId: c.clientId, headers: c.headers }
+        } catch {}
+        try { 
+          const c = await api.getAPICredentials('UAT')
+          uatApiCreds = { baseUrl: c.baseUrl, apiKey: c.apiKey, clientId: c.clientId, headers: c.headers }
+        } catch {}
+        try { 
+          const c = await api.getAPICredentials('Production')
+          prodApiCreds = { baseUrl: c.baseUrl, apiKey: c.apiKey, clientId: c.clientId, headers: c.headers }
+        } catch {}
+        try { 
+          const c = await api.getUICredentials('SIT')
+          sitUiCreds = { appUrl: c.appUrl, username: c.username, password: c.password }
+        } catch {}
+        try { 
+          const c = await api.getUICredentials('UAT')
+          uatUiCreds = { appUrl: c.appUrl, username: c.username, password: c.password }
+        } catch {}
+        try { 
+          const c = await api.getUICredentials('Production')
+          prodUiCreds = { appUrl: c.appUrl, username: c.username, password: c.password }
+        } catch {}
+        
         const defaults: Environment[] = [
           { 
             id: '1', 
             name: 'sit', 
             label: 'SIT', 
             type: 'ui', 
-            baseUrl: 'https://pf.pfsit.xyz/selectprism/login', 
+            baseUrl: sitUiCreds.appUrl || '', 
             color: 'blue', 
             icon: '🧪', 
             isDefault: true,
-            username: 'prismforce_sp_sit@prismforce.ai',
-            password: '@!agent_123'
+            username: sitUiCreds.username,
+            password: sitUiCreds.password
           },
           { 
             id: '2', 
             name: 'uat', 
             label: 'UAT', 
             type: 'ui', 
-            baseUrl: 'https://selectprism.pfuat.xyz/selectprism/login', 
+            baseUrl: uatUiCreds.appUrl || '', 
             color: 'yellow', 
             icon: '🚀',
-            username: 'testuser11@gmail.com',
-            password: '@!agent_123'
+            username: uatUiCreds.username,
+            password: uatUiCreds.password
           },
           { 
             id: '3', 
             name: 'production', 
             label: 'PRODUCTION', 
             type: 'ui', 
-            baseUrl: 'https://pf.prismforce.com/selectprism/login', 
+            baseUrl: prodUiCreds.appUrl || '', 
             color: 'green', 
             icon: '✅',
-            username: 'prismforce_sp_system@prismforce.ai',
-            password: '@!agent_123'
+            username: prodUiCreds.username,
+            password: prodUiCreds.password
           },
           { 
             id: '4', 
             name: 'api-sit', 
             label: 'API SIT', 
             type: 'api', 
-            baseUrl: 'https://api.pfsit.xyz', 
+            baseUrl: sitApiCreds.baseUrl || '', 
             color: 'blue', 
             icon: '⚡',
-            apiKey: '6ad35d5f-2e5c-4532-b3d6-8a51098e6650',
-            clientId: 'tahud70ter',
+            apiKey: sitApiCreds.apiKey,
+            clientId: sitApiCreds.clientId,
             headers: {
               'Content-Type': 'application/json',
-              'x-api-key': '6ad35d5f-2e5c-4532-b3d6-8a51098e6650'
+              ...sitApiCreds.headers
             }
           },
           { 
@@ -191,14 +233,14 @@ export default function EnvironmentsPage() {
             name: 'api-uat', 
             label: 'API UAT', 
             type: 'api', 
-            baseUrl: 'https://api.pfuat.xyz', 
+            baseUrl: uatApiCreds.baseUrl || '', 
             color: 'yellow', 
             icon: '🚀',
-            apiKey: '03527504-5a0d-4791-a956-43fd65bf74cf',
-            clientId: 'lylgr6i80t',
+            apiKey: uatApiCreds.apiKey,
+            clientId: uatApiCreds.clientId,
             headers: {
               'Content-Type': 'application/json',
-              'x-api-key': '03527504-5a0d-4791-a956-43fd65bf74cf'
+              ...uatApiCreds.headers
             }
           },
           { 
@@ -206,14 +248,14 @@ export default function EnvironmentsPage() {
             name: 'api-production', 
             label: 'API PRODUCTION', 
             type: 'api', 
-            baseUrl: 'https://api.prismforce.com', 
+            baseUrl: prodApiCreds.baseUrl || '', 
             color: 'green', 
             icon: '✅',
-            apiKey: '66348187-c030-41b9-bbe1-8664fefea076',
-            clientId: 'zknqqzn8va',
+            apiKey: prodApiCreds.apiKey,
+            clientId: prodApiCreds.clientId,
             headers: {
               'Content-Type': 'application/json',
-              'x-api-key': '66348187-c030-41b9-bbe1-8664fefea076'
+              ...prodApiCreds.headers
             }
           },
         ]

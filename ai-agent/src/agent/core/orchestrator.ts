@@ -210,10 +210,18 @@ export class AgentOrchestrator {
     console.log(chalk.yellow(`${'═'.repeat(60)}`));
 
     // Execute each action
+    let stopTestGracefully = false;
     for (const action of testCase.actions) {
       try {
         const result = await this.actionExecutor.execute(action);
         actionResults.push(result);
+
+        // Check for graceful stop (e.g., check visibility action failed but test should pass)
+        if (result.metadata?.stopTest) {
+          stopTestGracefully = true;
+          this.logger.info('Test stopping gracefully due to checkVisibleOrLog action');
+          break;
+        }
 
         if (result.status === 'failure' && !this.config.execution.continueOnFailure) {
           break;

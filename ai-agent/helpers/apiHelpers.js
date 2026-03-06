@@ -2,14 +2,23 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const { faker } = require('@faker-js/faker');
 
-// Base URL from environment or default
-const BASE_URL = process.env.API_BASE_URL || 'https://api.pfuat.xyz';
+// Base URL from environment - required
+const BASE_URL = process.env.API_BASE_URL;
+if (!BASE_URL) {
+  console.warn('Warning: API_BASE_URL not configured in .env - using environment-specific URLs');
+}
 
-// API Key from environment or default
-const API_KEY = process.env.API_KEY || '03527504-5a0d-4791-a956-43fd65bf74cf';
+// API Key from environment - required for API tests
+const API_KEY = process.env.API_KEY;
+if (!API_KEY) {
+  console.warn('Warning: API_KEY not configured in .env - API tests may fail');
+}
 
-// API Client ID from environment or default
-const API_CLIENT_ID = process.env.API_CLIENT_ID || 'lylgr6i80t';
+// API Client ID from environment - required for API tests
+const API_CLIENT_ID = process.env.API_CLIENT_ID;
+if (!API_CLIENT_ID) {
+  console.warn('Warning: API_CLIENT_ID not configured in .env - API tests may fail');
+}
 
 // API Endpoints
 const ENDPOINTS = {

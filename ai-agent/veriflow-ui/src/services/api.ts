@@ -92,7 +92,7 @@ class ApiClient {
     return this.request<{ testCases: any[] }>('/api/tests/api')
   }
 
-  async executeTest(testId: string, type: string, fileName: string, environmentUrl?: string, environmentConfig?: { apiKey?: string; clientId?: string; headers?: Record<string, string> }) {
+  async executeTest(testId: string, type: string, fileName: string, environmentUrl?: string, environmentConfig?: { apiKey?: string; clientId?: string; headers?: Record<string, string>; username?: string; password?: string }) {
     return this.request<{ success: boolean; executionId: string; message: string }>(
       '/api/tests/execute',
       {
@@ -197,6 +197,32 @@ class ApiClient {
     return this.request<{ message: string }>(`/api/users/${userId}`, {
       method: 'DELETE',
     })
+  }
+
+  // Credentials endpoints - fetch from server instead of hardcoding
+  async getAPICredentials(environment: string) {
+    return this.request<{
+      baseUrl: string
+      apiKey: string
+      clientId: string
+      headers: Record<string, string>
+    }>(`/api/credentials/${environment}/api`)
+  }
+
+  async getUICredentials(environment: string) {
+    return this.request<{
+      appUrl: string
+      username: string
+      password: string
+    }>(`/api/credentials/${environment}/ui`)
+  }
+
+  async getAvailableEnvironments() {
+    return this.request<{
+      name: string
+      apiConfigured: boolean
+      uiConfigured: boolean
+    }[]>('/api/credentials/environments')
   }
 
   // Health check

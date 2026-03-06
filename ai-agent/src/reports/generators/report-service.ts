@@ -285,7 +285,8 @@ export class ReportService {
                 // support several shapes: {label,value}, string, array
                 if (Array.isArray(ld)) {
                     (ld as any[]).forEach(entry => {
-                        if (entry?.label && entry?.value) loggedDataItems.push({ label: String(entry.label), value: String(entry.value) });
+                        // Include entries even if value is empty string (for City/Location etc)
+                        if (entry?.label && entry?.value !== undefined) loggedDataItems.push({ label: String(entry.label), value: String(entry.value) });
                         else if (typeof entry === 'string') loggedDataItems.push({ label: 'Element Text', value: entry });
                     });
                     continue;
@@ -312,11 +313,37 @@ export class ReportService {
             }
         }
 
+    // Split logged data into sections based on section headers (labels starting with "═══")
+    const loggedDataSections: { title: string; items: { label: string; value: string }[] }[] = [];
+    let currentSection: { title: string; items: { label: string; value: string }[] } | null = null;
+
+    for (const item of loggedDataItems) {
+        // Check if this is a section header (starts with "═══" and has empty value)
+        if (item.label.startsWith('═══') && (!item.value || item.value === '')) {
+            // Extract section title (remove ═══ characters)
+            const title = item.label.replace(/═/g, '').trim();
+            currentSection = { title, items: [] };
+            loggedDataSections.push(currentSection);
+        } else if (currentSection) {
+            // Add to current section
+            currentSection.items.push(item);
+        } else {
+            // No section yet, create a default one
+            if (loggedDataSections.length === 0) {
+                currentSection = { title: 'Logged Data Summary', items: [] };
+                loggedDataSections.push(currentSection);
+            }
+            currentSection!.items.push(item);
+        }
+    }
+
     // Add logged data to report context
     const reportContext = {
       ...report,
       hasLoggedData: loggedDataItems.length > 0,
-      loggedDataItems
+      loggedDataItems,
+      loggedDataSections,
+      hasMultipleSections: loggedDataSections.length > 1
     };
 
     const html = compiled(reportContext);
@@ -595,6 +622,29 @@ export class ReportService {
 
         {{#if hasLoggedData}}
         <div class="logged-data-section">
+            {{#if hasMultipleSections}}
+            {{#each loggedDataSections}}
+            <div class="logged-data-table-wrapper" style="margin-bottom: 24px;">
+                <h3>📋 {{title}}</h3>
+                <table class="logged-data-table">
+                    <thead>
+                        <tr>
+                            <th>Label</th>
+                            <th>Value</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{#each items}}
+                        <tr>
+                            <td>{{label}}</td>
+                            <td>{{value}}</td>
+                        </tr>
+                        {{/each}}
+                    </tbody>
+                </table>
+            </div>
+            {{/each}}
+            {{else}}
             <h3>📋 Logged Data Summary</h3>
             <table class="logged-data-table">
                 <thead>
@@ -612,6 +662,7 @@ export class ReportService {
                     {{/each}}
                 </tbody>
             </table>
+            {{/if}}
         </div>
         {{/if}}
 

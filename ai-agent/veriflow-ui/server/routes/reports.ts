@@ -528,7 +528,7 @@ router.post('/cleanup', async (req, res) => {
     
     res.json({ 
       success: true, 
-      message: `Cleanup completed: ${result.recordsRemoved || result.deleted} items removed`,
+      message: `Cleanup completed: ${'recordsRemoved' in result ? result.recordsRemoved : result.deleted} items removed`,
       ...result 
     })
   } catch (error) {

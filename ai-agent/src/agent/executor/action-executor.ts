@@ -207,16 +207,30 @@ export class ActionExecutor {
         const metadata: Record<string, unknown> = {};
         if (actionResult?.loggedData) {
           metadata.loggedData = actionResult.loggedData;
-          // Store the logged value for later reference with ${STORED:label} syntax
-          const { label, value } = actionResult.loggedData;
-          this.storedVariables.set(label, value);
-          this.logger.debug(`Stored variable "${label}" = "${value}"`);
+          // Store the logged values for later reference with ${STORED:label} syntax
+          // Handle both single item and array of items
+          if (Array.isArray(actionResult.loggedData)) {
+            for (const item of actionResult.loggedData) {
+              this.storedVariables.set(item.label, item.value);
+              this.logger.debug(`Stored variable "${item.label}" = "${item.value}"`);
+            }
+          } else {
+            const { label, value } = actionResult.loggedData;
+            this.storedVariables.set(label, value);
+            this.logger.debug(`Stored variable "${label}" = "${value}"`);
+          }
+        }
+        
+        // Handle stopTest flag for graceful test termination
+        if (actionResult?.stopTest) {
+          metadata.stopTest = true;
+          metadata.wasVisible = actionResult.wasVisible ?? false;
         }
 
         return {
           actionId: resolvedAction.id,
           actionType: resolvedAction.type,
-          status: 'success',
+          status: actionResult?.stopTest ? 'skipped' : 'success',
           startTime,
           endTime,
           duration,
@@ -282,9 +296,13 @@ export class ActionExecutor {
 
   /**
    * Execute the actual action (may involve credential resolution)
-   * Returns action result data if available (e.g., logged text)
+   * Returns action result data if available (e.g., logged text, stopTest flag)
    */
-  private async executeAction(action: Action): Promise<{ loggedData?: { label: string; value: string } } | void> {
+  private async executeAction(action: Action): Promise<{
+    loggedData?: { label: string; value: string } | { label: string; value: string }[];
+    stopTest?: boolean;
+    wasVisible?: boolean;
+  } | void> {
     // Handle credential resolution for type actions
     if (action.type === ActionType.TYPE) {
       const typeAction = action as TypeAction;
