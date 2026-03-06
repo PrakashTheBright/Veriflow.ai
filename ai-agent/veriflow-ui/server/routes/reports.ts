@@ -1,15 +1,29 @@
-import { Router } from 'express'
+import { Router, Request } from 'express'
 import path from 'path'
 import fs from 'fs/promises'
 import pool from '../database/init'
 import { cleanupOldReports, cleanupKeepRecent, cleanupOrphanedFiles } from '../utils/cleanup'
 
+// Extend Request to include user info from auth middleware
+interface AuthRequest extends Request {
+  user?: {
+    id: string
+    username: string
+    email: string
+    role: string
+  }
+}
+
 const router = Router()
 
 // Get all reports
-router.get('/', async (req, res) => {
+router.get('/', async (req: AuthRequest, res) => {
   try {
     const { type, status, search, dateFrom, dateTo, limit = '50', offset = '0' } = req.query
+    
+    // Check if user is admin - admins see all reports, non-admins see only their own
+    const isAdmin = req.user?.role === 'admin'
+    const userId = req.user?.id
     
     let query = `
       SELECT 
@@ -29,6 +43,12 @@ router.get('/', async (req, res) => {
     `
     const params: any[] = []
     let paramIndex = 1
+
+    // Filter by user_id for non-admin users
+    if (!isAdmin && userId) {
+      query += ` AND te.user_id = $${paramIndex++}`
+      params.push(userId)
+    }
 
     if (type && type !== 'all') {
       query += ` AND te.test_type = $${paramIndex++}`
@@ -65,6 +85,12 @@ router.get('/', async (req, res) => {
     let countQuery = 'SELECT COUNT(*) as total FROM test_executions te WHERE te.completed_at IS NOT NULL'
     const countParams: any[] = []
     let countIndex = 1
+    
+    // Filter count by user_id for non-admin users
+    if (!isAdmin && userId) {
+      countQuery += ` AND te.user_id = $${countIndex++}`
+      countParams.push(userId)
+    }
     
     if (type && type !== 'all') {
       countQuery += ` AND te.test_type = $${countIndex++}`
@@ -130,9 +156,13 @@ router.get('/', async (req, res) => {
 })
 
 // Get report statistics
-router.get('/stats', async (req, res) => {
+router.get('/stats', async (req: AuthRequest, res) => {
   try {
-    const result = await pool.query(`
+    // Check if user is admin - admins see all stats, non-admins see only their own
+    const isAdmin = req.user?.role === 'admin'
+    const userId = req.user?.id
+    
+    let query = `
       SELECT 
         COUNT(*) as total,
         COUNT(*) FILTER (WHERE status = 'passed') as passed,
@@ -145,7 +175,17 @@ router.get('/stats', async (req, res) => {
             ELSE 0 END) as avg_pass_rate
       FROM test_executions
       WHERE completed_at IS NOT NULL
-    `)
+    `
+    
+    const params: any[] = []
+    
+    // Filter by user_id for non-admin users
+    if (!isAdmin && userId) {
+      query += ` AND user_id = $1`
+      params.push(userId)
+    }
+    
+    const result = await pool.query(query, params)
 
     const stats = result.rows[0]
 

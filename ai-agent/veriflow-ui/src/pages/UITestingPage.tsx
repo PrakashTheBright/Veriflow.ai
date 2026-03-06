@@ -197,7 +197,8 @@ export default function UITestingPage() {
         username: (selectedEnvironment as any).username,
         password: (selectedEnvironment as any).password,
       }
-      const response = await api.executeTest(testId, 'ui', test.fileName, selectedEnvironment.baseUrl, environmentConfig)
+      // Pass environment name to ensure correct environment-specific credentials are used on server
+      const response = await api.executeTest(testId, 'ui', test.fileName, selectedEnvironment.baseUrl, environmentConfig, selectedEnvironment.name)
       // Store the execution ID
       if (response.executionId) {
         setTests((prev) =>

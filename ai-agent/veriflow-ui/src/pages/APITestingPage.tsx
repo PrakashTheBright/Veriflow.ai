@@ -298,7 +298,8 @@ export default function APITestingPage() {
         clientId: (selectedEnvironment as any).clientId,
         headers: (selectedEnvironment as any).headers,
       }
-      await api.executeTest(testId, 'api', test.fileName, selectedEnvironment.baseUrl, environmentConfig)
+      // Pass environment name to ensure correct environment-specific credentials are used on server
+      await api.executeTest(testId, 'api', test.fileName, selectedEnvironment.baseUrl, environmentConfig, selectedEnvironment.name)
     } catch (error) {
       setTests((prev) =>
         prev.map((t) =>

@@ -36,6 +36,49 @@ interface AuthRequest extends Request {
 }
 
 /**
+ * Middleware to extract user info from JWT and attach to request
+ * This should be called before routes that need user info
+ */
+export const extractUser = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const authHeader = req.headers['authorization']
+    const token = authHeader && authHeader.split(' ')[1]
+
+    if (!token) {
+      return next() // No token, continue without user
+    }
+
+    let decoded: any
+    try {
+      decoded = jwt.verify(token, JWT_SECRET)
+    } catch {
+      return next() // Invalid token, continue without user
+    }
+
+    // Get user info including role
+    const userResult = await pool.query(
+      'SELECT id, username, email, role FROM users WHERE id = $1',
+      [decoded.userId]
+    )
+
+    if (userResult.rows.length > 0) {
+      const user = userResult.rows[0]
+      req.user = {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role || 'user'
+      }
+    }
+
+    next()
+  } catch (error) {
+    console.error('Extract user error:', error)
+    next() // On error, continue without user
+  }
+}
+
+/**
  * Middleware to check if user has access to the requested module/route
  * Admin users bypass all module checks
  */
@@ -68,6 +111,14 @@ export const checkModuleAccess = async (req: AuthRequest, res: Response, next: N
     }
 
     const user = userResult.rows[0]
+
+    // Attach user to request for downstream use
+    req.user = {
+      id: user.id,
+      username: '',
+      email: '',
+      role: user.role || 'user'
+    }
 
     // Admin users bypass module checks
     if (user.role === 'admin') {
