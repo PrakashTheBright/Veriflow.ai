@@ -31,6 +31,8 @@ export enum ActionType {
   CLEAR_COOKIES = 'clearCookies',
   LOG_TEXT = 'logText',
   SELECT_DATE = 'selectDate',
+  CHECK_VISIBLE_OR_LOG = 'checkVisibleOrLog',
+  RESET_CANDIDATE_BY_STATUS = 'resetCandidateByStatus',
   CUSTOM = 'custom'
 }
 
@@ -177,6 +179,21 @@ export interface SelectDateAction extends BaseAction {
   pickerSelector?: string; // Optional custom date picker selector
 }
 
+export interface CheckVisibleOrLogAction extends BaseAction {
+  type: ActionType.CHECK_VISIBLE_OR_LOG;
+  selector: string; // Selector to check visibility
+  fallbackMessage: string; // Message to log if selector is not visible
+  clickIfVisible?: boolean; // If true, click on the selector if visible
+  clickSelector?: string; // Optional: different selector to click (if different from check selector)
+  stopTestIfNotVisible?: boolean; // If true, stop test execution (gracefully) if not visible
+}
+
+export interface ResetCandidateByStatusAction extends BaseAction {
+  type: ActionType.RESET_CANDIDATE_BY_STATUS;
+  status: string; // Status to look for: "Interrupted", "In Progress", "Interview Expired"
+  menuOption?: string; // Menu option to click (default: "Regenerate Interview")
+}
+
 export type Action =
   | NavigateAction
   | ClickAction
@@ -197,6 +214,8 @@ export type Action =
   | SwitchFrameAction
   | LogTextAction
   | SelectDateAction
+  | CheckVisibleOrLogAction
+  | ResetCandidateByStatusAction
   | CustomAction;
 
 export interface ActionResult {

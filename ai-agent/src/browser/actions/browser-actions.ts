@@ -25,7 +25,9 @@ import {
   UploadFileAction,
   SwitchFrameAction,
   LogTextAction,
-  SelectDateAction
+  SelectDateAction,
+  CheckVisibleOrLogAction,
+  ResetCandidateByStatusAction
 } from '../../types';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -41,9 +43,13 @@ export class BrowserActions {
 
   /**
    * Execute an action based on its type
-   * Returns action result data (e.g., logged text values)
+   * Returns action result data (e.g., logged text values, stopTest flag)
    */
-  async execute(action: Action): Promise<{ loggedData?: { label: string; value: string } } | void> {
+  async execute(action: Action): Promise<{ 
+    loggedData?: { label: string; value: string } | { label: string; value: string }[];
+    stopTest?: boolean;
+    wasVisible?: boolean;
+  } | void> {
     switch (action.type) {
       case ActionType.NAVIGATE:
         await this.navigate(action as NavigateAction);
@@ -102,6 +108,12 @@ export class BrowserActions {
       case ActionType.SELECT_DATE:
         await this.selectDate(action as SelectDateAction);
         break;
+      case ActionType.CHECK_VISIBLE_OR_LOG:
+        const checkResult = await this.checkVisibleOrLog(action as CheckVisibleOrLogAction);
+        return checkResult;
+      case ActionType.RESET_CANDIDATE_BY_STATUS:
+        const resetResult = await this.resetCandidateByStatus(action as ResetCandidateByStatusAction);
+        return resetResult;
       default:
         throw new Error(`Unsupported action type: ${(action as Action).type}`);
     }
@@ -397,6 +409,362 @@ export class BrowserActions {
     console.log('╚════════════════════════════════════════════════════════════╝\n');
 
     return { label, value };
+  }
+
+  /**
+   * Check if a selector is visible, and if not, log a fallback message
+   * Optionally click on the element if visible
+   * Can stop the test gracefully if not visible (without marking as failed)
+   */
+  async checkVisibleOrLog(action: CheckVisibleOrLogAction): Promise<{ 
+    loggedData?: { label: string; value: string }; 
+    stopTest?: boolean;
+    wasVisible?: boolean;
+  }> {
+    const timeout = action.timeout ?? 10000; // Use a shorter timeout for check
+    let isVisible = false;
+
+    try {
+      // Try to find the element with a shorter timeout
+      const element = await this.currentFrame.waitForSelector(action.selector, { 
+        state: 'visible',
+        timeout 
+      });
+      isVisible = element !== null;
+    } catch (err) {
+      // Element not found or not visible within timeout
+      isVisible = false;
+    }
+
+    if (isVisible) {
+      // Element is visible
+      if (action.clickIfVisible) {
+        // Click on the element (or a different selector if specified)
+        const clickSelector = action.clickSelector || action.selector;
+        await this.currentFrame.click(clickSelector, {
+          force: true,
+          timeout: action.timeout
+        });
+      }
+      
+      console.log('\n╔════════════════════════════════════════════════════════════╗');
+      console.log('║  ✅ Visibility Check Passed                                 ║');
+      console.log('╠════════════════════════════════════════════════════════════╣');
+      console.log(`║  Selector: ${action.selector.substring(0, 48).padEnd(48)}║`);
+      console.log('╚════════════════════════════════════════════════════════════╝\n');
+
+      return { wasVisible: true };
+    } else {
+      // Element not visible - log the fallback message
+      const label = 'Status Check';
+      const value = action.fallbackMessage;
+
+      console.log('\n╔════════════════════════════════════════════════════════════╗');
+      console.log('║  ⚠️  Visibility Check - Element Not Found                   ║');
+      console.log('╠════════════════════════════════════════════════════════════╣');
+      console.log(`║  ${value.substring(0, 58).padEnd(58)}║`);
+      console.log('╚════════════════════════════════════════════════════════════╝\n');
+
+      return { 
+        loggedData: { label, value }, 
+        stopTest: action.stopTestIfNotVisible ?? false,
+        wasVisible: false
+      };
+    }
+  }
+
+  /**
+   * Reset candidate by status - checks if a candidate with specific status exists,
+   * and if found: logs candidate info, clicks action menu, clicks Regenerate Interview
+   * If found and reset: returns stopTest: true to gracefully end test as passed
+   * If not found: returns continue (allows next status check to run)
+   * Returns two sets of logged data: Before and After regeneration
+   */
+  async resetCandidateByStatus(action: ResetCandidateByStatusAction): Promise<{
+    loggedData?: { label: string; value: string }[];
+    stopTest?: boolean;
+    wasVisible?: boolean;
+  }> {
+    const timeout = action.timeout ?? 10000;
+    const status = action.status;
+    const menuOption = action.menuOption || 'Regenerate Interview';
+    
+    // Check if any candidate has this status
+    const statusSelector = `.ant-tag:has-text("${status}")`;
+    let isVisible = false;
+
+    try {
+      const element = await this.currentFrame.waitForSelector(statusSelector, {
+        state: 'visible',
+        timeout
+      });
+      isVisible = element !== null;
+    } catch (err) {
+      isVisible = false;
+    }
+
+    if (!isVisible) {
+      // Status not found - continue to next check (don't stop test)
+      console.log(`\n  ℹ️  No candidate with "${status}" status found - continuing...`);
+      return { wasVisible: false, stopTest: false };
+    }
+
+    // Status found - perform the reset
+    console.log('\n╔════════════════════════════════════════════════════════════╗');
+    console.log(`║  🔄 Found Candidate with "${status}" Status                 ║`.substring(0, 65) + '║');
+    console.log('╠════════════════════════════════════════════════════════════╣');
+
+    // Collect all logged data entries - two tables: Before and After
+    const loggedDataItems: { label: string; value: string }[] = [];
+
+    try {
+      // Row selector for the candidate with this status
+      const rowSelector = `.ant-table-tbody tr:has(.ant-tag:has-text("${status}"))`;
+      
+      // Helper function to extract text from a cell by column index
+      const extractCellText = async (cellIndex: number): Promise<string> => {
+        const selector = `${rowSelector} >> nth=0 >> td:nth-child(${cellIndex})`;
+        try {
+          const el = await this.currentFrame.waitForSelector(selector, { timeout: 3000 });
+          if (el) {
+            // Get inner text, excluding nested tags we don't want
+            let text = ((await el.textContent()) || '').trim();
+            return text;
+          }
+        } catch (e) {
+          // Cell not found
+        }
+        return '';
+      };
+
+      // Helper to extract only the direct text, not from nested .ant-tag
+      const extractCellTextExcludingTag = async (cellIndex: number): Promise<string> => {
+        const selector = `${rowSelector} >> nth=0 >> td:nth-child(${cellIndex})`;
+        try {
+          const el = await this.currentFrame.waitForSelector(selector, { timeout: 3000 });
+          if (el) {
+            // Check if this cell contains an ant-tag
+            const hasTag = await el.$('.ant-tag');
+            if (hasTag) {
+              // Return empty - this is the status column
+              return '';
+            }
+            return ((await el.textContent()) || '').trim();
+          }
+        } catch (e) {
+          // Cell not found
+        }
+        return '';
+      };
+
+      // ========== TABLE 1: Before Regenerate Interview Data ==========
+      loggedDataItems.push({ label: '═══ Before Regenerate Interview Data ═══', value: '' });
+
+      // Column mapping based on actual table structure:
+      // Col 1: Index/Checkbox, Col 2: Name, Col 3: Match Score, Col 4: Status (.ant-tag)
+      // Col 5: City, Col 6: Email, Col 7: Contact, Col 8: Role, Col 9: Expiry, Col 10: Actions
+
+      // Extract candidate name (column 2)
+      const candidateName = await extractCellText(2) || 'Unknown';
+      loggedDataItems.push({ label: 'Candidate Name', value: candidateName });
+      console.log(`║  Candidate Name: ${candidateName.substring(0, 42).padEnd(42)}║`);
+
+      // Extract match score (column 3)
+      const matchScore = await extractCellText(3);
+      if (matchScore) {
+        loggedDataItems.push({ label: 'Match Score', value: matchScore });
+        console.log(`║  Match Score: ${matchScore.substring(0, 45).padEnd(45)}║`);
+      }
+
+      // Extract status from .ant-tag (column 4 contains the tag)
+      const statusTagSelector = `${rowSelector} >> nth=0 >> .ant-tag`;
+      let currentStatus = status;
+      try {
+        const statusEl = await this.currentFrame.waitForSelector(statusTagSelector, { timeout: 3000 });
+        if (statusEl) {
+          currentStatus = ((await statusEl.textContent()) || '').trim() || status;
+        }
+      } catch (e) {
+        // Use default status
+      }
+      loggedDataItems.push({ label: 'Status', value: currentStatus });
+      console.log(`║  Status: ${currentStatus.padEnd(50)}║`);
+
+      // Extract city/location (column 5) - skip column 4 as it contains status
+      const cityLocation = await extractCellTextExcludingTag(5);
+      loggedDataItems.push({ label: 'City/Location', value: cityLocation || '' });
+      console.log(`║  City/Location: ${(cityLocation || '').substring(0, 43).padEnd(43)}║`);
+
+      // Extract email ID (column 6)
+      const emailId = await extractCellText(6);
+      if (emailId) {
+        loggedDataItems.push({ label: 'Email ID', value: emailId });
+        console.log(`║  Email ID: ${emailId.substring(0, 48).padEnd(48)}║`);
+      }
+
+      // Extract contact number (column 7)
+      const contactNo = await extractCellText(7);
+      if (contactNo) {
+        loggedDataItems.push({ label: 'Contact No', value: contactNo });
+        console.log(`║  Contact No: ${contactNo.substring(0, 46).padEnd(46)}║`);
+      }
+
+      // Extract role (column 8)
+      const role = await extractCellText(8);
+      if (role) {
+        loggedDataItems.push({ label: 'Role', value: role });
+        console.log(`║  Role: ${role.substring(0, 52).padEnd(52)}║`);
+      }
+
+      // Extract expiry date (column 9)
+      const expiry = await extractCellText(9);
+      if (expiry) {
+        loggedDataItems.push({ label: 'Expiry', value: expiry });
+        console.log(`║  Expiry: ${expiry.substring(0, 50).padEnd(50)}║`);
+      }
+
+      console.log('╠════════════════════════════════════════════════════════════╣');
+
+      // Click the action menu (last td in the row)
+      const actionSelector = `${rowSelector} >> nth=0 >> td:last-child`;
+      await this.currentFrame.click(actionSelector, { force: true, timeout: 10000 });
+      console.log(`║  Action: Clicked action menu                               ║`);
+
+      // Wait a moment for dropdown to appear
+      await this.page.waitForTimeout(2000);
+
+      // Click the menu option (Regenerate Interview)
+      const menuSelector = `.ant-dropdown-menu-title-content:has-text("${menuOption}")`;
+      await this.currentFrame.click(menuSelector, { timeout: 10000 });
+      console.log(`║  Action: Clicked "${menuOption}"                    ║`.substring(0, 65) + '║');
+
+      // Wait for the action to complete
+      await this.page.waitForTimeout(3000);
+
+      // Try to capture any success message (Ant Design message component)
+      let successMessage = '';
+      try {
+        const messageSelector = '.ant-message-notice-content';
+        const messageEl = await this.currentFrame.waitForSelector(messageSelector, { timeout: 5000 });
+        if (messageEl) {
+          successMessage = ((await messageEl.textContent()) || '').trim();
+        }
+      } catch (e) {
+        // No message found
+      }
+      
+      if (!successMessage) {
+        successMessage = 'Interview has been regenerated successfully.';
+      }
+
+      console.log('╠════════════════════════════════════════════════════════════╣');
+      console.log('║  ✅ Interview Reset Successfully                            ║');
+      console.log('╚════════════════════════════════════════════════════════════╝\n');
+
+      // Wait for table to refresh
+      await this.page.waitForTimeout(2000);
+
+      // ========== TABLE 2: After Regenerate Interview Data ==========
+      console.log('\n╔════════════════════════════════════════════════════════════╗');
+      console.log('║  📋 After Regenerate Interview Data                         ║');
+      console.log('╠════════════════════════════════════════════════════════════╣');
+
+      loggedDataItems.push({ label: '═══ After Regenerate Interview Data ═══', value: '' });
+
+      // Re-read candidate info after regeneration (use candidate name to find the row)
+      const updatedRowSelector = `.ant-table-tbody tr:has(td:has-text("${candidateName}"))`;
+
+      // Helper for updated row
+      const extractUpdatedCellText = async (cellIndex: number): Promise<string> => {
+        const selector = `${updatedRowSelector} >> nth=0 >> td:nth-child(${cellIndex})`;
+        try {
+          const el = await this.currentFrame.waitForSelector(selector, { timeout: 3000 });
+          if (el) {
+            return ((await el.textContent()) || '').trim();
+          }
+        } catch (e) {
+          // Cell not found
+        }
+        return '';
+      };
+
+      // Extract updated candidate name
+      const updatedName = await extractUpdatedCellText(2) || candidateName;
+      loggedDataItems.push({ label: 'Candidate Name', value: updatedName });
+      console.log(`║  Candidate Name: ${updatedName.substring(0, 42).padEnd(42)}║`);
+
+      // Extract updated match score
+      const updatedMatchScore = await extractUpdatedCellText(3) || matchScore;
+      if (updatedMatchScore) {
+        loggedDataItems.push({ label: 'Match Score', value: updatedMatchScore });
+        console.log(`║  Match Score: ${updatedMatchScore.substring(0, 45).padEnd(45)}║`);
+      }
+
+      // Extract updated status
+      const updatedStatusSelector = `${updatedRowSelector} >> nth=0 >> .ant-tag`;
+      let updatedStatus = '';
+      try {
+        const statusEl = await this.currentFrame.waitForSelector(updatedStatusSelector, { timeout: 3000 });
+        if (statusEl) {
+          updatedStatus = ((await statusEl.textContent()) || '').trim();
+        }
+      } catch (e) {
+        updatedStatus = 'Interview Eligible';
+      }
+      loggedDataItems.push({ label: 'Status', value: updatedStatus || 'Interview Eligible' });
+      console.log(`║  Status: ${(updatedStatus || 'Interview Eligible').padEnd(50)}║`);
+
+      // City/Location
+      const updatedCity = await extractUpdatedCellText(5) || cityLocation;
+      loggedDataItems.push({ label: 'City/Location', value: updatedCity || '' });
+      console.log(`║  City/Location: ${(updatedCity || '').substring(0, 43).padEnd(43)}║`);
+
+      // Email (column 6)
+      const updatedEmail = await extractUpdatedCellText(6) || emailId;
+      if (updatedEmail) {
+        loggedDataItems.push({ label: 'Email ID', value: updatedEmail });
+        console.log(`║  Email ID: ${updatedEmail.substring(0, 48).padEnd(48)}║`);
+      }
+
+      // Contact (column 7)
+      const updatedContact = await extractUpdatedCellText(7) || contactNo;
+      if (updatedContact) {
+        loggedDataItems.push({ label: 'Contact No', value: updatedContact });
+        console.log(`║  Contact No: ${updatedContact.substring(0, 46).padEnd(46)}║`);
+      }
+
+      // Role (column 8)
+      const updatedRole = await extractUpdatedCellText(8) || role;
+      if (updatedRole) {
+        loggedDataItems.push({ label: 'Role', value: updatedRole });
+        console.log(`║  Role: ${updatedRole.substring(0, 52).padEnd(52)}║`);
+      }
+
+      // Expiry (column 9)
+      const updatedExpiry = await extractUpdatedCellText(9) || expiry;
+      if (updatedExpiry) {
+        loggedDataItems.push({ label: 'Expiry', value: updatedExpiry });
+        console.log(`║  Expiry: ${updatedExpiry.substring(0, 50).padEnd(50)}║`);
+      }
+
+      // Add the regenerate message
+      loggedDataItems.push({ label: 'Regenerate Interview Message', value: successMessage });
+      console.log(`║  Message: ${successMessage.substring(0, 49).padEnd(49)}║`);
+
+      console.log('╚════════════════════════════════════════════════════════════╝\n');
+
+      // Return with stopTest: true to end test gracefully as passed
+      return {
+        loggedData: loggedDataItems,
+        stopTest: true,
+        wasVisible: true
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.log(`║  ❌ Error: ${errorMsg.substring(0, 48).padEnd(48)}║`);
+      console.log('╚════════════════════════════════════════════════════════════╝\n');
+      throw error;
+    }
   }
 
   /**

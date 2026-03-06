@@ -1,9 +1,30 @@
-import { Router } from 'express'
+import { Router, Request } from 'express'
 import { spawn, exec } from 'child_process'
 import path from 'path'
 import fs from 'fs/promises'
 import { v4 as uuidv4 } from 'uuid'
 import pool from '../database/init'
+
+// Helper to get the ai-agent base path (works in both dev and production)
+// In dev: __dirname = veriflow-ui/server/routes -> ../../../ = ai-agent
+// In production: __dirname = veriflow-ui/dist/server/routes -> ../../../../ = ai-agent
+const getBasePath = (): string => {
+  // Check if running from dist folder (production)
+  const isProduction = __dirname.includes(path.join('dist', 'server', 'routes')) || __dirname.includes('dist\\server\\routes')
+  return isProduction 
+    ? path.join(__dirname, '../../../../') // dist/server/routes -> ai-agent
+    : path.join(__dirname, '../../../')    // server/routes -> ai-agent
+}
+
+// Extend Request to include user info from auth middleware
+interface AuthRequest extends Request {
+  user?: {
+    id: string
+    username: string
+    email: string
+    role: string
+  }
+}
 
 const router = Router()
 
@@ -168,7 +189,8 @@ const extractResponseBodies = (output: string, testId: string): any[] => {
 // Get UI test cases from test-cases/approved/
 router.get('/ui', async (req, res) => {
   try {
-    const testCasesPath = path.join(__dirname, '../../../test-cases/approved')
+    const basePath = getBasePath()
+    const testCasesPath = path.join(basePath, 'test-cases/approved')
     const files = await fs.readdir(testCasesPath)
     
     // Preferred ordering for UI tests
@@ -201,7 +223,8 @@ router.get('/ui', async (req, res) => {
 // Get API test cases from api-test/
 router.get('/api', async (req, res) => {
   try {
-    const apiTestPath = path.join(__dirname, '../../../api-test')
+    const basePath = getBasePath()
+    const apiTestPath = path.join(basePath, 'api-test')
     
     // Check if directory exists
     try {
@@ -241,14 +264,15 @@ router.get('/api', async (req, res) => {
 })
 
 // Execute a test
-router.post('/execute', async (req, res) => {
-  const { testId, type, fileName, environmentUrl, environmentConfig } = req.body
+router.post('/execute', async (req: AuthRequest, res) => {
+  const { testId, type, fileName, environmentUrl, environmentConfig, environmentName } = req.body
+  const userId = req.user?.id || null
   const io = req.app.get('io')
   const executionId = uuidv4()
 
   try {
     // Determine test file path
-    const basePath = path.join(__dirname, '../../..')
+    const basePath = getBasePath()
     const testFile = type === 'ui' 
       ? path.join(basePath, 'test-cases/approved', fileName)
       : path.join(basePath, 'api-test', fileName)
@@ -272,9 +296,9 @@ router.post('/execute', async (req, res) => {
 
     // Store execution in database
     await pool.query(
-      `INSERT INTO test_executions (id, test_name, test_type, file_name, status, started_at)
-       VALUES ($1, $2, $3, $4, 'running', NOW())`,
-      [executionId, fileName.replace(/\.(md|json|yaml)$/, ''), type, fileName]
+      `INSERT INTO test_executions (id, user_id, test_name, test_type, file_name, status, started_at)
+       VALUES ($1, $2, $3, $4, $5, 'running', NOW())`,
+      [executionId, userId, fileName.replace(/\.(md|json|yaml)$/, ''), type, fileName]
     )
 
     // For UI tests, use the AI agent
@@ -285,27 +309,65 @@ router.post('/execute', async (req, res) => {
       const agentEnv = { ...process.env }
       agentEnv.AGENT_KEEP_BROWSER_OPEN = 'false' // Ensure browser closes
       
+      // Determine environment type from environment name first, then fall back to URL detection
+      let env: EnvironmentType | null = null
+      if (environmentName) {
+        // Map environment name to environment type
+        const envNameLower = environmentName.toLowerCase()
+        if (envNameLower.includes('production') || envNameLower.includes('prod')) {
+          env = 'production'
+        } else if (envNameLower.includes('sit')) {
+          env = 'sit'
+        } else if (envNameLower.includes('uat')) {
+          env = 'uat'
+        }
+        console.log(`[UI Test ${testId}] Environment from name '${environmentName}': ${env || 'default'}`)
+      }
+      
+      // Fall back to URL detection if environment name mapping didn't work
+      if (!env && environmentUrl) {
+        env = detectEnvironment(environmentUrl)
+        console.log(`[UI Test ${testId}] Environment from URL detection: ${env || 'default'}`)
+      }
+      
+      // Set APP_URL - prioritize client URL, then environment-specific URL from .env
       if (environmentUrl) {
         agentEnv.APP_URL = environmentUrl
-        console.log(`[UI Test ${testId}] Using environment URL: ${environmentUrl}`)
-        
-        // Set credentials based on detected environment
-        const env = detectEnvironment(environmentUrl)
-        const creds = getUICredentials(env)
-        agentEnv.APP_USERNAME = creds.username
-        agentEnv.APP_PASSWORD = creds.password
-        console.log(`[UI Test ${testId}] Using ${env || 'default'} credentials`)
+        console.log(`[UI Test ${testId}] Using APP_URL from client: ${environmentUrl}`)
+      } else if (env) {
+        // Use environment-specific URL from .env
+        const envUrls: Record<EnvironmentType, string | undefined> = {
+          production: process.env.PROD_APP_URL,
+          sit: process.env.SIT_APP_URL,
+          uat: process.env.UAT_APP_URL,
+        }
+        const envUrl = envUrls[env]
+        if (envUrl) {
+          agentEnv.APP_URL = envUrl
+          console.log(`[UI Test ${testId}] Using APP_URL from .env for ${env}: ${envUrl}`)
+        }
       }
+      
+      // Get environment-specific credentials from .env based on resolved environment
+      const creds = getUICredentials(env)
+      agentEnv.APP_USERNAME = creds.username
+      agentEnv.APP_PASSWORD = creds.password
+      console.log(`[UI Test ${testId}] Using ${env || 'default'} credentials from .env`)
       
       // Override with provided credentials if any (takes precedence)
       if (environmentConfig?.username) {
         agentEnv.APP_USERNAME = environmentConfig.username
-        console.log(`[UI Test ${testId}] Using provided username: ${environmentConfig.username}`)
+        console.log(`[UI Test ${testId}] Overriding with provided username: ${environmentConfig.username}`)
       }
       if (environmentConfig?.password) {
         agentEnv.APP_PASSWORD = environmentConfig.password
-        console.log(`[UI Test ${testId}] Using provided password`)
+        console.log(`[UI Test ${testId}] Overriding with provided password`)
       }
+      
+      // Log final environment configuration
+      console.log(`[UI Test ${testId}] Final configuration:`)      
+      console.log(`[UI Test ${testId}]   APP_URL: ${agentEnv.APP_URL}`)      
+      console.log(`[UI Test ${testId}]   APP_USERNAME: ${agentEnv.APP_USERNAME}`)
       
       // Run the AI agent
       const agentProcess = spawn('node', [
@@ -461,17 +523,50 @@ router.post('/execute', async (req, res) => {
       
       // Build environment variables for API tests
       const apiTestEnv = { ...process.env }
-      const env = detectEnvironment(environmentUrl)
-      console.log(`[API Test ${testId}] Detected environment: ${env || 'default'}`)
       
-      // Set API_BASE_URL
-      if (environmentUrl) {
-        apiTestEnv.API_BASE_URL = environmentUrl
-        console.log(`[API Test ${testId}] Using API Base URL: ${environmentUrl}`)
+      // Determine environment type from environment name first, then fall back to URL detection
+      let env: EnvironmentType | null = null
+      if (environmentName) {
+        // Map environment name to environment type
+        const envNameLower = environmentName.toLowerCase()
+        if (envNameLower.includes('production') || envNameLower.includes('prod')) {
+          env = 'production'
+        } else if (envNameLower.includes('sit')) {
+          env = 'sit'
+        } else if (envNameLower.includes('uat')) {
+          env = 'uat'
+        }
+        console.log(`[API Test ${testId}] Environment from name '${environmentName}': ${env || 'default'}`)
       }
       
-      // Get API credentials - use provided or fall back to .env based on environment
+      // Fall back to URL detection if environment name mapping didn't work
+      if (!env && environmentUrl) {
+        env = detectEnvironment(environmentUrl)
+        console.log(`[API Test ${testId}] Environment from URL detection: ${env || 'default'}`)
+      }
+      
+      // Get environment-specific credentials from .env based on resolved environment
       const envCreds = getAPICredentials(env)
+      
+      // Set API_BASE_URL - prioritize environment-specific URL from .env if client URL is empty
+      if (environmentUrl) {
+        apiTestEnv.API_BASE_URL = environmentUrl
+        console.log(`[API Test ${testId}] Using API Base URL from client: ${environmentUrl}`)
+      } else if (env) {
+        // Use environment-specific URL from .env
+        const envUrls: Record<EnvironmentType, string | undefined> = {
+          production: process.env.PROD_API_BASE_URL,
+          sit: process.env.SIT_API_BASE_URL,
+          uat: process.env.UAT_API_BASE_URL,
+        }
+        const envUrl = envUrls[env]
+        if (envUrl) {
+          apiTestEnv.API_BASE_URL = envUrl
+          console.log(`[API Test ${testId}] Using API Base URL from .env for ${env}: ${envUrl}`)
+        }
+      }
+      
+      // Get API credentials - prioritize client config, then environment-specific .env values
       let apiKey = environmentConfig?.apiKey?.trim() || envCreds.apiKey
       let clientId = environmentConfig?.clientId?.trim() || envCreds.clientId
       

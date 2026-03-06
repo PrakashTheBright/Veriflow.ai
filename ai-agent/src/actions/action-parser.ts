@@ -714,6 +714,47 @@ export class ActionParser {
       };
     }
 
+    // Check if visible or log pattern: "check if selector <selector> is visible otherwise log <message>"
+    // Also supports: "check selector <selector> otherwise log <message>"
+    // Pattern: check [if] selector <selector> [is visible] otherwise log "<message>"
+    const checkVisibleOrLogMatch = original.match(/check\s+(?:if\s+)?selector\s+(.+?)\s+(?:is\s+visible\s+)?otherwise\s+log\s+["']([^"']+)["']/i);
+    if (checkVisibleOrLogMatch) {
+      return {
+        type: 'checkVisibleOrLog',
+        description: original,
+        selector: checkVisibleOrLogMatch[1].trim(),
+        fallbackMessage: checkVisibleOrLogMatch[2],
+        stopTestIfNotVisible: true
+      };
+    }
+
+    // Check if visible and click pattern: "check if selector <selector> is visible then click otherwise log <message>"
+    const checkVisibleClickMatch = original.match(/check\s+(?:if\s+)?selector\s+(.+?)\s+(?:is\s+visible\s+)?then\s+click(?:\s+on\s+selector\s+(.+?))?\s+otherwise\s+log\s+["']([^"']+)["']/i);
+    if (checkVisibleClickMatch) {
+      return {
+        type: 'checkVisibleOrLog',
+        description: original,
+        selector: checkVisibleClickMatch[1].trim(),
+        clickIfVisible: true,
+        clickSelector: checkVisibleClickMatch[2]?.trim() || undefined,
+        fallbackMessage: checkVisibleClickMatch[3],
+        stopTestIfNotVisible: true
+      };
+    }
+
+    // Reset candidate by status pattern: "reset candidate by status <status> otherwise continue"
+    // Pattern: reset candidate [by|with] status "<status>" [otherwise continue]
+    // Also: reset interview for status "<status>"
+    const resetCandidateMatch = original.match(/reset\s+(?:candidate|interview)\s+(?:by|for|with)?\s*status\s+["']([^"']+)["'](?:\s+otherwise\s+continue)?/i);
+    if (resetCandidateMatch) {
+      return {
+        type: 'resetCandidateByStatus',
+        description: original,
+        status: resetCandidateMatch[1].trim(),
+        menuOption: 'Regenerate Interview'
+      };
+    }
+
     this.logger.warn(`Could not parse instruction: ${original}`);
     return null;
   }
