@@ -300,11 +300,17 @@ const activeTestIds = new Set<string>()
 // Key = testId, Value = ChildProcess. Prevents orphaned agent accumulation.
 const activeAgentProcesses = new Map<string, import('child_process').ChildProcess>()
 
+// Global UI test lock — only ONE Playwright browser session may run at a time.
+// Multiple concurrent browsers cause OOM / resource exhaustion on the host which
+// manifests as "Target page, context or browser has been closed" errors mid-test.
+let activeUITestId: string | null = null
+
 // Kill all tracked agent processes. Called on SIGTERM/SIGINT so restarts leave
 // no orphans competing for browser resources.
 export function killAllActiveAgents() {
   if (activeAgentProcesses.size === 0) return
   console.log(`[Shutdown] Killing ${activeAgentProcesses.size} active agent process(es)...`)
+  activeUITestId = null // release global UI lock on server shutdown
   for (const [testId, proc] of activeAgentProcesses.entries()) {
     try {
       proc.kill('SIGKILL')
@@ -388,6 +394,19 @@ router.post('/execute', async (req: AuthRequest, res) => {
 
     // For UI tests, use the AI agent
     if (type === 'ui') {
+      // Enforce global one-at-a-time constraint for UI tests.
+      // Running multiple Playwright browsers concurrently exhausts memory and causes
+      // "Target page, context or browser has been closed" failures mid-test.
+      if (activeUITestId !== null) {
+        activeTestIds.delete(testId)
+        return res.status(409).json({
+          success: false,
+          message: `Another UI test is currently running (${activeUITestId}). Please wait for it to complete before starting a new one.`,
+        })
+      }
+      activeUITestId = testId
+      console.log(`[UI Test ${testId}] Acquired global UI test lock`)
+
       const startTime = Date.now()
       
       // Build environment variables
@@ -543,6 +562,11 @@ router.post('/execute', async (req: AuthRequest, res) => {
         console.log(`[Test ${testId}] Process exited with code ${code}, signal ${signal}`)
         // Deregister from active process map on any exit.
         activeAgentProcesses.delete(testId)
+        // Release the global UI lock so the next UI test can proceed.
+        if (activeUITestId === testId) {
+          activeUITestId = null
+          console.log(`[UI Test ${testId}] Released global UI test lock`)
+        }
 
         // Surface agent stderr when the process fails — critical for diagnosing test errors.
         if ((code !== 0 || signal) && errorOutput && errorOutput.trim()) {

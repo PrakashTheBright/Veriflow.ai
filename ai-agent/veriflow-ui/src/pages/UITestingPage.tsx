@@ -107,23 +107,15 @@ export default function UITestingPage() {
     stopExecutionPolling(testId)
 
     const startedAt = Date.now()
-    // Grace period: do not honour 'failed' from the DB during the first 60 seconds
-    // after execution start. During this window the agent is still warming up
-    // (npx + ts-node cold-start), and any stale/transitional 'failed' row in the
-    // DB must not flip the UI card prematurely. Socket events remain the primary
-    // source of truth during the grace period.
-    const INITIAL_GRACE_MS = 60_000
-
     const timer = setInterval(async () => {
       try {
         const execution = await api.getExecutionStatus(executionId)
         const normalizedStatus = execution?.status as UITest['status']
-        const elapsed = Date.now() - startedAt
 
         // Reconcile status if socket update was missed.
         // Only show toast + resolve completion if the socket handler hasn't already done so
         // (i.e. the resolver is still present). This prevents duplicate toasts.
-        if (normalizedStatus === 'passed') {
+        if (normalizedStatus === 'passed' || normalizedStatus === 'failed') {
           setTests((prev) =>
             prev.map((t) =>
               t.id === testId
@@ -137,50 +129,19 @@ export default function UITestingPage() {
                 : t
             )
           )
+
           if (completionResolversRef.current.has(testId)) {
             const testName = testsRef.current.find(t => t.id === testId)?.name || 'Test'
-            toast.success(`${testName} completed successfully`)
+            if (normalizedStatus === 'passed') {
+              toast.success(`${testName} completed successfully`)
+            } else {
+              toast.error(`${testName} failed`)
+            }
             completionResolversRef.current.get(testId)?.()
             completionResolversRef.current.delete(testId)
             runningGuardRef.current.delete(testId)
           }
-          unsubscribeRefs.current.get(testId)?.()
-          unsubscribeRefs.current.delete(testId)
-          stopExecutionPolling(testId)
-          return
-        }
-
-        if (normalizedStatus === 'failed') {
-          // During grace period, only honour 'failed' if the DB row was completed
-          // (has a completed_at timestamp). A row with no completed_at during grace
-          // period means the agent hasn't finished yet — keep showing 'running'.
-          const hasCompletedAt = !!execution?.completed_at
-          if (!hasCompletedAt && elapsed < INITIAL_GRACE_MS) {
-            // Still starting up — ignore transient failed row, keep card running.
-            console.log(`[Polling ${testId}] Ignoring transient 'failed' during grace period (elapsed: ${elapsed}ms, no completed_at)`)
-            return
-          }
-
-          setTests((prev) =>
-            prev.map((t) =>
-              t.id === testId
-                ? {
-                    ...t,
-                    status: 'failed',
-                    progress: 100,
-                    duration: execution?.duration ?? t.duration,
-                    reportPath: execution?.report_path ?? t.reportPath,
-                  }
-                : t
-            )
-          )
-          if (completionResolversRef.current.has(testId)) {
-            const testName = testsRef.current.find(t => t.id === testId)?.name || 'Test'
-            toast.error(`${testName} failed`)
-            completionResolversRef.current.get(testId)?.()
-            completionResolversRef.current.delete(testId)
-            runningGuardRef.current.delete(testId)
-          }
+          // Unsubscribe from socket so late progress events don't reset the terminal status.
           unsubscribeRefs.current.get(testId)?.()
           unsubscribeRefs.current.delete(testId)
           stopExecutionPolling(testId)
@@ -194,16 +155,16 @@ export default function UITestingPage() {
               t.id === testId ? { ...t, status: 'failed', progress: 100 } : t
             )
           )
-          toast.error('Test timed out after 15 minutes. Please retry execution.')
+          toast.error('Test status timed out. Please retry execution.')
           completionResolversRef.current.get(testId)?.()
           completionResolversRef.current.delete(testId)
           runningGuardRef.current.delete(testId)
           stopExecutionPolling(testId)
         }
       } catch {
-        // Keep polling on transient API errors (network blip, 404 row not yet inserted, etc.)
+        // Keep polling on transient API errors.
       }
-    }, 5000) // Poll every 5s — socket events handle real-time, polling is just a fallback
+    }, 3000)
 
     pollingIntervalsRef.current.set(testId, timer)
   }, [stopExecutionPolling])
@@ -254,19 +215,56 @@ export default function UITestingPage() {
     }
   }, [])
 
-  // Fetch tests on mount
+  // Fetch tests on mount and hydrate with last known execution status from DB
   useEffect(() => {
     const fetchTests = async () => {
       try {
         const { testCases } = await api.getUITests()
-        setTests(testCases.map((tc: any) => ({
+
+        // Build initial test list with pending status
+        const initialTests: UITest[] = testCases.map((tc: any) => ({
           id: tc.id,
           name: tc.name,
           fileName: tc.fileName,
           description: `Execute ${tc.name} test flow`,
-          status: 'pending',
+          status: 'pending' as const,
           progress: 0,
-        })))
+        }))
+
+        // Hydrate with the most recent execution result from the DB so the page
+        // shows real Passed/Failed badges instead of always starting as Pending.
+        try {
+          const { reports } = await api.getReports({ type: 'ui', limit: 100 })
+          if (reports && reports.length > 0) {
+            // Build a map: normalised test name → most recent report
+            // Reports are returned newest-first from the API.
+            const latestByName = new Map<string, any>()
+            for (const r of reports) {
+              const normName = (r.name || '').toLowerCase().replace(/[-_\s]+/g, '-')
+              if (!latestByName.has(normName)) latestByName.set(normName, r)
+            }
+
+            setTests(initialTests.map(t => {
+              const normName = t.fileName.replace(/\.md$/, '').toLowerCase()
+              const lastRun = latestByName.get(normName)
+              if (!lastRun) return t
+              const lastStatus = lastRun.status === 'passed' ? 'passed'
+                : lastRun.status === 'failed' ? 'failed'
+                : 'pending'
+              return {
+                ...t,
+                status: lastStatus,
+                duration: lastRun.duration,
+                progress: lastStatus === 'pending' ? 0 : 100,
+              }
+            }))
+            return
+          }
+        } catch {
+          // Reports fetch is best-effort — fall back to pending state
+        }
+
+        setTests(initialTests)
       } catch (error) {
         console.error('Failed to fetch tests:', error)
         toast.error('Failed to load test cases')
@@ -409,10 +407,13 @@ export default function UITestingPage() {
     } catch (error) {
       console.error(`[runTest Error] testId=${testId}:`, error);
       const message = error instanceof Error ? error.message : 'Test execution failed'
+      // Treat "already running" (same test) AND "another UI test" (different test / global lock)
+      // as non-fatal — restore to pending so the card doesn't permanently show Failed.
       const isAlreadyRunning = message.toLowerCase().includes('already running')
+        || message.toLowerCase().includes('another ui test')
 
       if (isAlreadyRunning) {
-        toast.error('This test is already running. Please wait for it to complete.')
+        toast.error('A UI test is already running. Please wait for it to complete.')
         // Restore card to pending so it doesn't show a phantom Running state.
         setTests((prev) =>
           prev.map((t) =>
@@ -444,6 +445,10 @@ export default function UITestingPage() {
   }, [subscribeToTest, selectedEnvironment, startExecutionPolling, stopExecutionPolling])
 
   const runAllTests = async () => {
+    if (tests.some(t => t.status === 'running')) {
+      toast.error('A test is already running. Please wait for it to complete.')
+      return
+    }
     setRunningAll(true)
     // Run tests one at a time: await each runTest() which now waits for the test
     // to fully complete (passed/failed) before the loop advances.
@@ -616,7 +621,7 @@ export default function UITestingPage() {
               </button>
               <button
                 onClick={runAllTests}
-                disabled={runningAll}
+                disabled={runningAll || tests.some(t => t.status === 'running')}
                 className="btn-primary flex items-center gap-2 disabled:opacity-50 hover:scale-105 transition-transform"
               >
                 {runningAll ? (
@@ -703,8 +708,9 @@ export default function UITestingPage() {
                       e.stopPropagation()
                       runTest(test.id)
                     }}
-                    disabled={test.status === 'running'}
-                    className="p-2 rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
+                    disabled={tests.some(t => t.status === 'running')}
+                    title={tests.some(t => t.status === 'running') ? 'A test is already running. Please wait.' : 'Run test'}
+                    className="p-2 rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {test.status === 'running' ? (
                       <Loader2 className="w-5 h-5 text-neon-blue animate-spin" />
