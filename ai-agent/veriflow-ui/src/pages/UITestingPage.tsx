@@ -256,6 +256,8 @@ export default function UITestingPage() {
                 status: lastStatus,
                 duration: lastRun.duration,
                 progress: lastStatus === 'pending' ? 0 : 100,
+                // Preserve executionId so View Report works after page reload
+                executionId: lastRun.id,
               }
             }))
             return
@@ -420,6 +422,10 @@ export default function UITestingPage() {
             t.id === testId && t.status === 'running' ? { ...t, status: 'pending', progress: 0 } : t
           )
         )
+        // Clean up refs so they don't linger until the next runTest call
+        unsubscribeRefs.current.get(testId)?.()
+        unsubscribeRefs.current.delete(testId)
+        expectedExecutionIdRef.current.delete(testId)
         runningGuardRef.current.delete(testId)
         complete()
       } else {
