@@ -764,11 +764,7 @@ router.post('/execute', async (req: AuthRequest, res) => {
         activeTestIds.delete(testId)
       })
 
-      res.json({
-        success: true,
-        executionId,
-        message: 'API test execution started',
-      })
+      // res.json() was already sent above — nothing to return here.
     }
   } catch (error) {
     console.error(`[EXECUTE] Test execution error caught in outer catch (testId=${testId}):`, error)
@@ -822,30 +818,25 @@ router.get('/execution/:id', async (req, res) => {
     const execution = result.rows[0]
 
     // Guard against stale executions that never received a terminal update.
-    // Only apply the timeout guard if no active agent process is currently running for
-    // that test. This prevents premature 'failed' while an agent is still starting up.
     const startedAt = execution.started_at ? new Date(execution.started_at).getTime() : null
     const isRunningTooLong =
       execution.status === 'running' &&
       !execution.completed_at &&
       startedAt !== null &&
-      Date.now() - startedAt > 10 * 60 * 1000  // 10 minutes
+      Date.now() - startedAt > 15 * 60 * 1000
 
-    // Check if there's an active agent process by looking through all running processes
-    const hasActiveAgent = Array.from(activeAgentProcesses.values()).some(proc => !proc.exitCode && !proc.signalCode)
-
-    if (isRunningTooLong && !hasActiveAgent) {
+    if (isRunningTooLong) {
       await pool.query(
         `UPDATE test_executions
          SET status = 'failed',
-             error_message = COALESCE(error_message, 'Execution timed out - no active agent process'),
+             error_message = COALESCE(error_message, 'Execution timed out before final status update'),
              completed_at = NOW()
          WHERE id = $1`,
         [id]
       )
 
       execution.status = 'failed'
-      execution.error_message = execution.error_message || 'Execution timed out - no active agent process'
+      execution.error_message = execution.error_message || 'Execution timed out before final status update'
       execution.completed_at = new Date().toISOString()
     }
     
