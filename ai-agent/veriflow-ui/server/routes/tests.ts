@@ -299,6 +299,7 @@ const activeTestIds = new Set<string>()
 // Track all spawned agent processes so we can kill them on server shutdown.
 // Key = testId, Value = ChildProcess. Prevents orphaned agent accumulation.
 const activeAgentProcesses = new Map<string, import('child_process').ChildProcess>()
+const activeExecutionIds = new Set<string>()
 
 // Global UI test lock — only ONE Playwright browser session may run at a time.
 // Multiple concurrent browsers cause OOM / resource exhaustion on the host which
@@ -321,6 +322,7 @@ export function killAllActiveAgents() {
   }
   activeAgentProcesses.clear()
   activeTestIds.clear()
+  activeExecutionIds.clear()
 }
 
 // Execute a test
@@ -520,6 +522,7 @@ router.post('/execute', async (req: AuthRequest, res) => {
       
       // Register process so it can be killed on server shutdown (prevents orphans).
       activeAgentProcesses.set(testId, agentProcess)
+      activeExecutionIds.add(executionId)
 
       let output = ''
       let errorOutput = ''
@@ -571,6 +574,7 @@ router.post('/execute', async (req: AuthRequest, res) => {
         console.log(`[Test ${testId}] Process exited with code ${code}, signal ${signal}`)
         // Deregister from active process map on any exit.
         activeAgentProcesses.delete(testId)
+        activeExecutionIds.delete(executionId)
         // Release the global UI lock so the next UI test can proceed.
         if (activeUITestId === testId) {
           activeUITestId = null
@@ -811,6 +815,7 @@ router.post('/execute', async (req: AuthRequest, res) => {
     if (orphanProc) {
       try { orphanProc.kill('SIGKILL') } catch {}
       activeAgentProcesses.delete(testId)
+      activeExecutionIds.delete(executionId)
       // exitHandler will emit {status: 'failed'} via the process 'close' event.
     } else {
       // Agent was never spawned — emit 'failed' directly since no exitHandler will fire.
@@ -851,12 +856,20 @@ router.get('/execution/:id', async (req, res) => {
     const execution = result.rows[0]
 
     // Guard against stale executions that never received a terminal update.
-    const startedAt = execution.started_at ? new Date(execution.started_at).getTime() : null
+    // Use the activeExecutionIds tracking rather than pure timestamps to avoid
+    // clock-skew issues between the Node server and remote Postgres database.
+    const isRunningLocally = activeExecutionIds.has(id)
+
+    // Fallback: If not running locally, and it is older than 15 mins (if we can trust clock skew).
+    // The problem is DB "NOW()" vs "Date.now()" has heavy skew in this environment.
+    // It's safer to only consider it "timed out" if we are definitively sure it's not running
+    // in this Node process AND it's been a long time. Because of clock skew, we just check
+    // our local memory set. If it is NOT in our memory set, and status is still running,
+    // then it's a stale execution from a previous backend restart.
     const isRunningTooLong =
       execution.status === 'running' &&
       !execution.completed_at &&
-      startedAt !== null &&
-      Date.now() - startedAt > 15 * 60 * 1000
+      !isRunningLocally
 
     if (isRunningTooLong) {
       await pool.query(

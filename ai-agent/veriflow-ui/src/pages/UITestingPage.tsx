@@ -116,6 +116,15 @@ export default function UITestingPage() {
         // Only show toast + resolve completion if the socket handler hasn't already done so
         // (i.e. the resolver is still present). This prevents duplicate toasts.
         if (normalizedStatus === 'passed' || normalizedStatus === 'failed') {
+          // Grace period: for the first 60s, ignore 'failed' statuses from the database 
+          // if we don't have a completed_at timestamp. This prevents stale terminal states
+          // from previous runs (e.g. timeouts) from prematurely marking a new run as failed 
+          // before the agent has had time to start and report its first 'running' event.
+          const isGracePeriod = Date.now() - startedAt < 60000
+          if (normalizedStatus === 'failed' && isGracePeriod && !execution?.completed_at) {
+            return // Ignore stale failure during startup phase
+          }
+          
           setTests((prev) =>
             prev.map((t) =>
               t.id === testId
@@ -231,41 +240,6 @@ export default function UITestingPage() {
           progress: 0,
         }))
 
-        // Hydrate with the most recent execution result from the DB so the page
-        // shows real Passed/Failed badges instead of always starting as Pending.
-        try {
-          const { reports } = await api.getReports({ type: 'ui', limit: 100 })
-          if (reports && reports.length > 0) {
-            // Build a map: normalised test name → most recent report
-            // Reports are returned newest-first from the API.
-            const latestByName = new Map<string, any>()
-            for (const r of reports) {
-              const normName = (r.name || '').toLowerCase().replace(/[-_\s]+/g, '-')
-              if (!latestByName.has(normName)) latestByName.set(normName, r)
-            }
-
-            setTests(initialTests.map(t => {
-              const normName = t.fileName.replace(/\.md$/, '').toLowerCase()
-              const lastRun = latestByName.get(normName)
-              if (!lastRun) return t
-              const lastStatus = lastRun.status === 'passed' ? 'passed'
-                : lastRun.status === 'failed' ? 'failed'
-                : 'pending'
-              return {
-                ...t,
-                status: lastStatus,
-                duration: lastRun.duration,
-                progress: lastStatus === 'pending' ? 0 : 100,
-                // Preserve executionId so View Report works after page reload
-                executionId: lastRun.id,
-              }
-            }))
-            return
-          }
-        } catch {
-          // Reports fetch is best-effort — fall back to pending state
-        }
-
         setTests(initialTests)
       } catch (error) {
         console.error('Failed to fetch tests:', error)
@@ -335,11 +309,19 @@ export default function UITestingPage() {
         prev.map((t) => {
           if (t.id !== testId) return t
           // Guard: never let a late 'running' progress event override a terminal
-          // status that polling already set. This prevents the card from bouncing
-          // back to "Running" after a "Failed" / "Passed" toast fired.
-          if ((t.status === 'passed' || t.status === 'failed') && status.status === 'running') {
-            return t
-          }
+          // status that was set by THIS execution's completion event.
+          // We identify "this execution" by comparing executionId — if the card
+          // already shows a terminal status for the SAME executionId that is now
+          // sending a running event, it's a late/out-of-order event and we drop it.
+          // We must NOT apply this guard across different executions (e.g. re-running
+          // a Failed test) because that would prevent the new run's Running state.
+          const incomingExecId = (status as any).executionId
+          const isLateEventFromSameRun =
+            (t.status === 'passed' || t.status === 'failed') &&
+            status.status === 'running' &&
+            incomingExecId !== undefined &&
+            t.executionId === incomingExecId
+          if (isLateEventFromSameRun) return t
           return {
             ...t,
             status: status.status,
@@ -421,42 +403,21 @@ export default function UITestingPage() {
     } catch (error) {
       console.error(`[runTest Error] testId=${testId}:`, error);
       const message = error instanceof Error ? error.message : 'Test execution failed'
-      // Treat "already running" (same test) AND "another UI test" (different test / global lock)
-      // as non-fatal — restore to pending so the card doesn't permanently show Failed.
-      const isAlreadyRunning = message.toLowerCase().includes('already running')
-        || message.toLowerCase().includes('another ui test')
-
-      if (isAlreadyRunning) {
-        toast.error('A UI test is already running. Please wait for it to complete.')
-        // Restore card to pending so it doesn't show a phantom Running state.
-        setTests((prev) =>
-          prev.map((t) =>
-            t.id === testId && t.status === 'running' ? { ...t, status: 'pending', progress: 0 } : t
-          )
+      // Generic HTTP / network error — the test execution REQUEST failed, not
+      // the test itself. Don't mark the card as Failed (that status is reserved
+      // for actual test failures). Restore to pending so the user can retry.
+      setTests((prev) =>
+        prev.map((t) =>
+          t.id === testId ? { ...t, status: 'pending', progress: 0 } : t
         )
-        // Clean up refs so they don't linger until the next runTest call
-        unsubscribeRefs.current.get(testId)?.()
-        unsubscribeRefs.current.delete(testId)
-        expectedExecutionIdRef.current.delete(testId)
-        runningGuardRef.current.delete(testId)
-        complete()
-      } else {
-        // Generic HTTP / network error — the test execution REQUEST failed, not
-        // the test itself. Don't mark the card as Failed (that status is reserved
-        // for actual test failures). Restore to pending so the user can retry.
-        setTests((prev) =>
-          prev.map((t) =>
-            t.id === testId ? { ...t, status: 'pending', progress: 0 } : t
-          )
-        )
-        toast.error(`Could not start test: ${message}`)
-        stopExecutionPolling(testId)
-        unsubscribeRefs.current.get(testId)?.()
-        unsubscribeRefs.current.delete(testId)
-        runningGuardRef.current.delete(testId)
-        expectedExecutionIdRef.current.delete(testId)
-        complete()
-      }
+      )
+      toast.error(`Could not start test: ${message}`)
+      stopExecutionPolling(testId)
+      unsubscribeRefs.current.get(testId)?.()
+      unsubscribeRefs.current.delete(testId)
+      runningGuardRef.current.delete(testId)
+      expectedExecutionIdRef.current.delete(testId)
+      complete()
     }
 
     // Await full completion before returning. This is what makes runAllTests sequential:
