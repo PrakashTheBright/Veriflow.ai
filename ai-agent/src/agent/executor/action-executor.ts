@@ -238,15 +238,18 @@ export class ActionExecutor {
         };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+        const willRetry = this.shouldRetry(lastError, attempt, maxRetries);
         
         this.logger.warn(`Action attempt ${attempt} failed`, {
           actionId: resolvedAction.id,
           error: lastError.message,
-          willRetry: attempt <= maxRetries
+          willRetry
         });
 
-        if (attempt <= maxRetries) {
+        if (willRetry) {
           await this.delay(this.config.execution.retryDelay);
+        } else {
+          break;
         }
       }
     }
@@ -292,6 +295,26 @@ export class ActionExecutor {
    */
   private printStepFailed(errorMessage?: string): void {
     console.log(chalk.red(`   ✗ Failed: ${errorMessage || 'Unknown error'}`));
+  }
+
+  /**
+   * Determine whether to retry a failed action.
+   * Timeout/assertion failures are typically deterministic and expensive to repeat.
+   */
+  private shouldRetry(error: Error, attempt: number, maxRetries: number): boolean {
+    if (attempt > maxRetries) return false;
+
+    const message = (error.message || '').toLowerCase();
+    const nonRetryablePatterns = [
+      'timeout',
+      'timed out',
+      'assertion failed',
+      'url assertion failed',
+      'visibility assertion failed',
+      'credential not found'
+    ];
+
+    return !nonRetryablePatterns.some((pattern) => message.includes(pattern));
   }
 
   /**

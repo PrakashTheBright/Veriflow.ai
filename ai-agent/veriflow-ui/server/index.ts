@@ -7,7 +7,7 @@ import dotenv from 'dotenv'
 import path from 'path'
 
 import authRoutes from './routes/auth'
-import testRoutes from './routes/tests'
+import testRoutes, { killAllActiveAgents } from './routes/tests'
 import reportRoutes from './routes/reports'
 import userRoutes from './routes/users'
 import testCaseRoutes from './routes/testcases'
@@ -18,8 +18,9 @@ import { autoCleanup } from './utils/cleanup'
 import { checkModuleAccess } from './middleware/moduleAccess'
 
 // Load environment variables from both ai-agent/.env and veriflow-ui/.env
-dotenv.config({ path: path.join(__dirname, '../../.env') }) // ai-agent/.env (primary)
-dotenv.config({ path: path.join(__dirname, '../.env') }) // veriflow-ui/.env (fallback)
+// Use override:true so .env values win over any stale inherited shell variables.
+dotenv.config({ path: path.join(__dirname, '../../.env'), override: true }) // ai-agent/.env (primary)
+dotenv.config({ path: path.join(__dirname, '../.env'), override: true }) // veriflow-ui/.env (fallback)
 
 const app = express()
 const httpServer = createServer(app)
@@ -108,5 +109,17 @@ async function start() {
 }
 
 start()
+
+// Kill all spawned agent processes on shutdown so restarts don't leave orphans
+// competing for browser/CPU resources. This is the primary fix for the
+// "Target page, context or browser has been closed" / "Test execution failed"
+// failures that accumulate across backend restarts.
+const onShutdown = (signal: string) => {
+  console.log(`\n[${signal}] Shutting down — killing active agent processes...`)
+  killAllActiveAgents()
+  process.exit(0)
+}
+process.on('SIGINT', () => onShutdown('SIGINT'))
+process.on('SIGTERM', () => onShutdown('SIGTERM'))
 
 export { io }

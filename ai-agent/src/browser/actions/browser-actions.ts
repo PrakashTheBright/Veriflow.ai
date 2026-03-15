@@ -35,10 +35,15 @@ import * as fs from 'fs';
 export class BrowserActions {
   private page: Page;
   private currentFrame: Page | Frame;
+  private waitScale: number;
 
   constructor(page: Page) {
     this.page = page;
     this.currentFrame = page;
+    const parsedWaitScale = Number(process.env.WAIT_DURATION_SCALE || '1');
+    this.waitScale = Number.isFinite(parsedWaitScale) && parsedWaitScale > 0
+      ? parsedWaitScale
+      : 1;
   }
 
   /**
@@ -160,7 +165,8 @@ export class BrowserActions {
   }
 
   async wait(action: WaitAction): Promise<void> {
-    await this.page.waitForTimeout(action.duration);
+    const scaledDuration = Math.max(200, Math.round(action.duration * this.waitScale));
+    await this.page.waitForTimeout(scaledDuration);
   }
 
   async waitForSelector(action: WaitForSelectorAction): Promise<void> {

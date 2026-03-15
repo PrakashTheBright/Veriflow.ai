@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Globe, Play, CheckCircle2, XCircle, Clock, Loader2,
@@ -9,64 +9,36 @@ import { api } from '../services/api'
 import { useSocket } from '../hooks/useSocket'
 import { getEnvironmentColor, type Environment } from '../config/environments'
 
-// Load environments from localStorage
+const DEFAULT_UI_ENVIRONMENTS: Environment[] = [
+  { name: 'sit', label: 'SIT', type: 'ui', baseUrl: '', color: 'blue', icon: '🧪', username: '', password: '' },
+  { name: 'uat', label: 'UAT', type: 'ui', baseUrl: '', color: 'yellow', icon: '🚀', username: '', password: '' },
+  { name: 'production', label: 'PRODUCTION', type: 'ui', baseUrl: '', color: 'green', icon: '✅', username: '', password: '' },
+]
+
+// Load environments from localStorage — safe against malformed JSON or empty/API-only stores.
 const loadEnvironments = (): Environment[] => {
-  const stored = localStorage.getItem('veriflow_environments')
-  if (stored) {
-    const parsed = JSON.parse(stored)
-    // Filter to only show UI environments
-    return parsed.filter((env: any) => env.type === 'ui')
+  try {
+    const stored = localStorage.getItem('veriflow_environments')
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      const uiEnvs = parsed.filter((env: any) => env.type === 'ui')
+      if (uiEnvs.length > 0) return uiEnvs
+    }
+  } catch {
+    // Malformed localStorage — fall through to defaults
   }
-  // Return empty defaults - credentials and URLs must be configured via .env and Environments page
-  return [
-    { 
-      name: 'sit', 
-      label: 'SIT', 
-      type: 'ui', 
-      baseUrl: '', 
-      color: 'blue', 
-      icon: '🧪',
-      username: '',
-      password: ''
-    },
-    { 
-      name: 'uat', 
-      label: 'UAT', 
-      type: 'ui', 
-      baseUrl: '', 
-      color: 'yellow', 
-      icon: '🚀',
-      username: '',
-      password: ''
-    },
-    { 
-      name: 'production', 
-      label: 'PRODUCTION', 
-      type: 'ui', 
-      baseUrl: '', 
-      color: 'green', 
-      icon: '✅',
-      username: '',
-      password: ''
-    },
-  ]
+  return DEFAULT_UI_ENVIRONMENTS
 }
 
 const loadSelectedEnvironment = (): Environment => {
-  // Use a separate key for UI environment to avoid conflict with API testing
-  const stored = localStorage.getItem('veriflow_selected_ui_environment')
-  if (stored) {
-    try {
+  try {
+    const stored = localStorage.getItem('veriflow_selected_ui_environment')
+    if (stored) {
       const parsed = JSON.parse(stored)
-      // Only use the stored environment if it's a UI type
-      if (parsed.type === 'ui') {
-        return parsed
-      }
-      // If it's an API environment, fall back to first UI environment
-      return loadEnvironments()[0]
-    } catch {
-      return loadEnvironments()[0]
+      if (parsed?.type === 'ui') return parsed
     }
+  } catch {
+    // Malformed localStorage — fall through to defaults
   }
   return loadEnvironments()[0]
 }
@@ -105,6 +77,136 @@ export default function UITestingPage() {
   const [selectedEnvironment, setSelectedEnvironment] = useState<Environment>(loadSelectedEnvironment())
   const [showEnvDropdown, setShowEnvDropdown] = useState(false)
   const { subscribeToTest } = useSocket()
+  const pollingIntervalsRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map())
+  // Ref mirror for latest tests state — avoids stale closures in useCallback without
+  // making every status update recreate runTest.
+  const testsRef = useRef<UITest[]>([])
+  // Synchronous guard: tracks tests that have a pending/active API call. Prevents
+  // double-execution from rapid clicks before React re-renders the disabled button.
+  const runningGuardRef = useRef<Set<string>>(new Set())
+  // Store unsubscribe functions so they can be called on cleanup.
+  const unsubscribeRefs = useRef<Map<string, (() => void) | undefined>>(new Map())
+  // Completion resolvers: each entry resolves the Promise returned by runTest().
+  // Allows runAllTests to await true completion before starting the next test.
+  const completionResolversRef = useRef<Map<string, () => void>>(new Map())
+  // Track the executionId for each running testId. Socket events whose executionId
+  // does NOT match are from a previous (stale) execution and are discarded.
+  // This prevents false 'failed' toasts when the backend reloads between runs.
+  const expectedExecutionIdRef = useRef<Map<string, string>>(new Map())
+
+  const stopExecutionPolling = useCallback((testId: string) => {
+    const timer = pollingIntervalsRef.current.get(testId)
+    if (timer) {
+      clearInterval(timer)
+      pollingIntervalsRef.current.delete(testId)
+    }
+  }, [])
+
+  const startExecutionPolling = useCallback((testId: string, executionId: string) => {
+    // Prevent duplicate polling for the same test card
+    stopExecutionPolling(testId)
+
+    const startedAt = Date.now()
+    // Grace period: do not honour 'failed' from the DB during the first 60 seconds
+    // after execution start. During this window the agent is still warming up
+    // (npx + ts-node cold-start), and any stale/transitional 'failed' row in the
+    // DB must not flip the UI card prematurely. Socket events remain the primary
+    // source of truth during the grace period.
+    const INITIAL_GRACE_MS = 60_000
+
+    const timer = setInterval(async () => {
+      try {
+        const execution = await api.getExecutionStatus(executionId)
+        const normalizedStatus = execution?.status as UITest['status']
+        const elapsed = Date.now() - startedAt
+
+        // Reconcile status if socket update was missed.
+        // Only show toast + resolve completion if the socket handler hasn't already done so
+        // (i.e. the resolver is still present). This prevents duplicate toasts.
+        if (normalizedStatus === 'passed') {
+          setTests((prev) =>
+            prev.map((t) =>
+              t.id === testId
+                ? {
+                    ...t,
+                    status: normalizedStatus,
+                    progress: 100,
+                    duration: execution?.duration ?? t.duration,
+                    reportPath: execution?.report_path ?? t.reportPath,
+                  }
+                : t
+            )
+          )
+          if (completionResolversRef.current.has(testId)) {
+            const testName = testsRef.current.find(t => t.id === testId)?.name || 'Test'
+            toast.success(`${testName} completed successfully`)
+            completionResolversRef.current.get(testId)?.()
+            completionResolversRef.current.delete(testId)
+            runningGuardRef.current.delete(testId)
+          }
+          unsubscribeRefs.current.get(testId)?.()
+          unsubscribeRefs.current.delete(testId)
+          stopExecutionPolling(testId)
+          return
+        }
+
+        if (normalizedStatus === 'failed') {
+          // During grace period, only honour 'failed' if the DB row was completed
+          // (has a completed_at timestamp). A row with no completed_at during grace
+          // period means the agent hasn't finished yet — keep showing 'running'.
+          const hasCompletedAt = !!execution?.completed_at
+          if (!hasCompletedAt && elapsed < INITIAL_GRACE_MS) {
+            // Still starting up — ignore transient failed row, keep card running.
+            console.log(`[Polling ${testId}] Ignoring transient 'failed' during grace period (elapsed: ${elapsed}ms, no completed_at)`)
+            return
+          }
+
+          setTests((prev) =>
+            prev.map((t) =>
+              t.id === testId
+                ? {
+                    ...t,
+                    status: 'failed',
+                    progress: 100,
+                    duration: execution?.duration ?? t.duration,
+                    reportPath: execution?.report_path ?? t.reportPath,
+                  }
+                : t
+            )
+          )
+          if (completionResolversRef.current.has(testId)) {
+            const testName = testsRef.current.find(t => t.id === testId)?.name || 'Test'
+            toast.error(`${testName} failed`)
+            completionResolversRef.current.get(testId)?.()
+            completionResolversRef.current.delete(testId)
+            runningGuardRef.current.delete(testId)
+          }
+          unsubscribeRefs.current.get(testId)?.()
+          unsubscribeRefs.current.delete(testId)
+          stopExecutionPolling(testId)
+          return
+        }
+
+        // Safety timeout for stale "running" jobs shown in UI.
+        if (Date.now() - startedAt > 15 * 60 * 1000) {
+          setTests((prev) =>
+            prev.map((t) =>
+              t.id === testId ? { ...t, status: 'failed', progress: 100 } : t
+            )
+          )
+          toast.error('Test timed out after 15 minutes. Please retry execution.')
+          completionResolversRef.current.get(testId)?.()
+          completionResolversRef.current.delete(testId)
+          runningGuardRef.current.delete(testId)
+          stopExecutionPolling(testId)
+        }
+      } catch {
+        // Keep polling on transient API errors (network blip, 404 row not yet inserted, etc.)
+      }
+    }, 5000) // Poll every 5s — socket events handle real-time, polling is just a fallback
+
+    pollingIntervalsRef.current.set(testId, timer)
+  }, [stopExecutionPolling])
 
   // Listen for environment updates from localStorage
   useEffect(() => {
@@ -133,6 +235,25 @@ export default function UITestingPage() {
     localStorage.setItem('veriflow_selected_ui_environment', JSON.stringify(selectedEnvironment))
   }, [selectedEnvironment])
 
+  // Keep testsRef in sync with state so useCallback closures always see latest tests.
+  useEffect(() => {
+    testsRef.current = tests
+  }, [tests])
+
+  // Cleanup polling timers and socket subscriptions on unmount
+  useEffect(() => {
+    return () => {
+      pollingIntervalsRef.current.forEach((timer) => clearInterval(timer))
+      pollingIntervalsRef.current.clear()
+      unsubscribeRefs.current.forEach((fn) => fn?.())
+      unsubscribeRefs.current.clear()
+      // Resolve pending completions so any awaiting runAllTests loop can exit cleanly.
+      completionResolversRef.current.forEach((resolve) => resolve())
+      completionResolversRef.current.clear()
+      expectedExecutionIdRef.current.clear()
+    }
+  }, [])
+
   // Fetch tests on mount
   useEffect(() => {
     const fetchTests = async () => {
@@ -156,9 +277,25 @@ export default function UITestingPage() {
     fetchTests()
   }, [])
 
-  const runTest = useCallback(async (testId: string) => {
-    const test = tests.find(t => t.id === testId)
-    if (!test) return
+  const runTest = useCallback(async (testId: string): Promise<void> => {
+    // Synchronous guard — prevents double-execution before React re-renders the
+    // disabled button state (e.g. rapid double-click).
+    if (runningGuardRef.current.has(testId)) return
+    runningGuardRef.current.add(testId)
+
+    // Use testsRef so this callback never depends on stale `tests` state.
+    const test = testsRef.current.find(t => t.id === testId)
+    if (!test) {
+      runningGuardRef.current.delete(testId)
+      return
+    }
+
+    // Cancel any previous subscription for this testId before creating a new one.
+    unsubscribeRefs.current.get(testId)?.()
+    unsubscribeRefs.current.delete(testId)
+    // Resolve and discard any stale completion resolver.
+    completionResolversRef.current.get(testId)?.()
+    completionResolversRef.current.delete(testId)
 
     setTests((prev) =>
       prev.map((t) =>
@@ -166,66 +303,156 @@ export default function UITestingPage() {
       )
     )
 
-    // Subscribe to real-time updates
+    // Create a completion promise. runTest awaits this before returning, so
+    // callers (runAllTests) get true sequential execution — each test fully
+    // completes before the next one starts.
+    let resolveCompletion!: () => void
+    const completionPromise = new Promise<void>(res => { resolveCompletion = res })
+    completionResolversRef.current.set(testId, resolveCompletion)
+
+    const complete = () => {
+      completionResolversRef.current.get(testId)?.()
+      completionResolversRef.current.delete(testId)
+    }
+
+    // Subscribe to real-time socket updates.
     const unsubscribe = subscribeToTest(testId, (status) => {
+      const expectedExecId = expectedExecutionIdRef.current.get(testId)
+      // PENDING_EXECUTION: the HTTP round-trip is still in-flight and we don't
+      // know the authoritative executionId yet. Block ALL socket events during
+      // this window — this prevents a stale 'failed' event from a prior run
+      // (different executionId) from passing the guard and flipping the card
+      // to Failed before the real agent even starts.
+      if (expectedExecId === 'PENDING_EXECUTION') return
+      // Stale-event guard: discard events whose executionId doesn't match the
+      // authoritative one we received from the HTTP response.
+      if ((status as any).executionId && expectedExecId && (status as any).executionId !== expectedExecId) {
+        console.warn(`[Socket] Discarding stale event for ${testId}: got executionId ${ (status as any).executionId}, expected ${expectedExecId}`)
+        return
+      }
+
       setTests((prev) =>
-        prev.map((t) =>
-          t.id === testId
-            ? {
-                ...t,
-                status: status.status,
-                progress: status.progress,
-                duration: status.duration,
-                reportPath: status.reportPath,
-              }
-            : t
-        )
+        prev.map((t) => {
+          if (t.id !== testId) return t
+          // Guard: never let a late 'running' progress event override a terminal
+          // status that polling already set. This prevents the card from bouncing
+          // back to "Running" after a "Failed" / "Passed" toast fired.
+          if ((t.status === 'passed' || t.status === 'failed') && status.status === 'running') {
+            return t
+          }
+          return {
+            ...t,
+            status: status.status,
+            progress: status.progress,
+            duration: status.duration,
+            reportPath: status.reportPath,
+          }
+        })
       )
 
       if (status.status === 'passed') {
-        toast.success(`${test.name} passed!`)
-        unsubscribe?.()
+        // Only toast if polling hasn't already handled this completion (prevents duplicate toasts).
+        if (completionResolversRef.current.has(testId)) {
+          toast.success(`${test.name} passed!`)
+        }
+        expectedExecutionIdRef.current.delete(testId)
+        stopExecutionPolling(testId)
+        unsubscribeRefs.current.get(testId)?.()
+        unsubscribeRefs.current.delete(testId)
+        runningGuardRef.current.delete(testId)
+        complete()
       } else if (status.status === 'failed') {
-        toast.error(`${test.name} failed`)
-        unsubscribe?.()
+        // Only toast if polling hasn't already handled this completion (prevents duplicate toasts).
+        if (completionResolversRef.current.has(testId)) {
+          toast.error(`${test.name} failed`)
+        }
+        expectedExecutionIdRef.current.delete(testId)
+        stopExecutionPolling(testId)
+        unsubscribeRefs.current.get(testId)?.()
+        unsubscribeRefs.current.delete(testId)
+        runningGuardRef.current.delete(testId)
+        complete()
       }
     })
+    unsubscribeRefs.current.set(testId, unsubscribe)
+
+    // Block all socket events until the HTTP response tells us the real executionId.
+    // Without this sentinel a stale 'failed' event from a previous run can arrive
+    // in the null-expectedExecId window, get stored as the expected ID, and flip
+    // the card to Failed while the real agent is still starting.
+    expectedExecutionIdRef.current.set(testId, 'PENDING_EXECUTION')
 
     try {
-      // Pass environment configuration including username and password for UI tests
       const environmentConfig = {
         username: (selectedEnvironment as any).username,
         password: (selectedEnvironment as any).password,
       }
-      // Pass environment name to ensure correct environment-specific credentials are used on server
-      const response = await api.executeTest(testId, 'ui', test.fileName, selectedEnvironment.baseUrl, environmentConfig, selectedEnvironment.name)
-      // Store the execution ID
+      const response = await api.executeTest(
+        testId, 'ui', test.fileName,
+        selectedEnvironment.baseUrl, environmentConfig, selectedEnvironment.name
+      )
       if (response.executionId) {
+        // Replace the PENDING sentinel with the authoritative executionId.
+        // Socket events are now unblocked for exactly this execution run.
+        expectedExecutionIdRef.current.set(testId, response.executionId)
         setTests((prev) =>
           prev.map((t) =>
             t.id === testId ? { ...t, executionId: response.executionId } : t
           )
         )
+        startExecutionPolling(testId, response.executionId)
+      } else {
+        // Server returned success but no executionId — clear PENDING so socket
+        // events are not permanently blocked on this test card.
+        expectedExecutionIdRef.current.delete(testId)
       }
     } catch (error) {
-      setTests((prev) =>
-        prev.map((t) =>
-          t.id === testId
-            ? { ...t, status: 'failed', progress: 100 }
-            : t
+      console.error(`[runTest Error] testId=${testId}:`, error);
+      const message = error instanceof Error ? error.message : 'Test execution failed'
+      const isAlreadyRunning = message.toLowerCase().includes('already running')
+
+      if (isAlreadyRunning) {
+        toast.error('This test is already running. Please wait for it to complete.')
+        // Restore card to pending so it doesn't show a phantom Running state.
+        setTests((prev) =>
+          prev.map((t) =>
+            t.id === testId && t.status === 'running' ? { ...t, status: 'pending', progress: 0 } : t
+          )
         )
-      )
-      toast.error('Test execution failed')
-      unsubscribe?.()
+        runningGuardRef.current.delete(testId)
+        complete()
+      } else {
+        setTests((prev) =>
+          prev.map((t) =>
+            t.id === testId ? { ...t, status: 'failed', progress: 100 } : t
+          )
+        )
+        toast.error(`Error: ${message}`)
+        stopExecutionPolling(testId)
+        unsubscribeRefs.current.get(testId)?.()
+        unsubscribeRefs.current.delete(testId)
+        runningGuardRef.current.delete(testId)
+        expectedExecutionIdRef.current.delete(testId)
+        complete()
+      }
     }
-  }, [tests, subscribeToTest, selectedEnvironment])
+
+    // Await full completion before returning. This is what makes runAllTests sequential:
+    // it awaits runTest(), which only resolves here when the test reaches passed/failed.
+    await completionPromise
+  // Removed `tests` from deps — testsRef.current is used instead to avoid stale closures.
+  }, [subscribeToTest, selectedEnvironment, startExecutionPolling, stopExecutionPolling])
 
   const runAllTests = async () => {
     setRunningAll(true)
-    for (const test of tests) {
+    // Run tests one at a time: await each runTest() which now waits for the test
+    // to fully complete (passed/failed) before the loop advances.
+    // This prevents concurrent browser resource contention.
+    for (const test of testsRef.current) {
       if (test.status !== 'running') {
         await runTest(test.id)
-        await new Promise((resolve) => setTimeout(resolve, 1000))
+        // Brief pause between tests for browser/OS resources to fully release.
+        await new Promise((resolve) => setTimeout(resolve, 2000))
       }
     }
     setRunningAll(false)
@@ -233,6 +460,15 @@ export default function UITestingPage() {
   }
 
   const resetTests = () => {
+    pollingIntervalsRef.current.forEach((timer) => clearInterval(timer))
+    pollingIntervalsRef.current.clear()
+    unsubscribeRefs.current.forEach((fn) => fn?.())
+    unsubscribeRefs.current.clear()
+    // Resolve any pending completions so runAllTests loop exits cleanly.
+    completionResolversRef.current.forEach((resolve) => resolve())
+    completionResolversRef.current.clear()
+    expectedExecutionIdRef.current.clear()
+    runningGuardRef.current.clear()
     setTests(prev => prev.map(t => ({
       ...t,
       status: 'pending' as const,

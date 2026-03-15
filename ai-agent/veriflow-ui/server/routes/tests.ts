@@ -48,28 +48,56 @@ const detectEnvironment = (url: string): EnvironmentType | null => {
   return null
 }
 
+// Avoid leaking sensitive values in server logs.
+const maskForLog = (value: string | undefined, visibleChars = 2): string => {
+  if (!value) return 'not-set'
+  if (value.length <= visibleChars * 2) return '*'.repeat(value.length)
+  return `${value.slice(0, visibleChars)}${'*'.repeat(Math.max(value.length - visibleChars * 2, 4))}${value.slice(-visibleChars)}`
+}
+
+const parseBooleanEnv = (value: string | undefined, fallback: boolean): boolean => {
+  if (typeof value !== 'string') return fallback
+  const normalized = value.trim().toLowerCase()
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false
+  return fallback
+}
+
+// Windows child_process spawn can fail with EINVAL when env contains undefined values.
+const buildChildEnv = (sourceEnv: NodeJS.ProcessEnv): Record<string, string> => {
+  return Object.entries(sourceEnv).reduce<Record<string, string>>((acc, [key, value]) => {
+    const hasInvalidKey = !key || key.startsWith('=') || key.includes('\u0000')
+    const hasInvalidValue = typeof value === 'string' && value.includes('\u0000')
+
+    if (!hasInvalidKey && typeof value === 'string' && !hasInvalidValue) {
+      acc[key] = value
+    }
+    return acc
+  }, {})
+}
+
 // Get credentials for environment from process.env
 const getUICredentials = (env: EnvironmentType | null) => {
   const defaults = {
-    username: process.env.APP_USERNAME || 'testuser11@gmail.com',
-    password: process.env.APP_PASSWORD || '@!agent_123'
+    username: process.env.APP_USERNAME,
+    password: process.env.APP_PASSWORD
   }
   
   switch (env) {
     case 'production':
       return {
-        username: process.env.PROD_APP_USERNAME || 'prismforce_sp_system@prismforce.ai',
-        password: process.env.PROD_APP_PASSWORD || '@!agent_123'
+        username: process.env.PROD_APP_USERNAME || process.env.PRODUCTION_APP_USERNAME || defaults.username,
+        password: process.env.PROD_APP_PASSWORD || process.env.PRODUCTION_APP_PASSWORD || defaults.password
       }
     case 'sit':
       return {
-        username: process.env.SIT_APP_USERNAME || 'testuser11@gmail.com',
-        password: process.env.SIT_APP_PASSWORD || '@!agent_123'
+        username: process.env.SIT_APP_USERNAME || defaults.username,
+        password: process.env.SIT_APP_PASSWORD || defaults.password
       }
     case 'uat':
       return {
-        username: process.env.UAT_APP_USERNAME || 'testuser11@gmail.com',
-        password: process.env.UAT_APP_PASSWORD || '@!agent_123'
+        username: process.env.UAT_APP_USERNAME || defaults.username,
+        password: process.env.UAT_APP_PASSWORD || defaults.password
       }
     default:
       return defaults
@@ -81,8 +109,8 @@ const getAPICredentials = (env: EnvironmentType | null) => {
   switch (env) {
     case 'production':
       return {
-        apiKey: process.env.PROD_API_KEY,
-        clientId: process.env.PROD_API_CLIENT_ID
+        apiKey: process.env.PROD_API_KEY || process.env.PRODUCTION_API_KEY,
+        clientId: process.env.PROD_API_CLIENT_ID || process.env.PRODUCTION_API_CLIENT_ID
       }
     case 'sit':
       return {
@@ -263,12 +291,48 @@ router.get('/api', async (req, res) => {
   }
 })
 
+// In-memory set of testIds currently being executed.
+// Acts as a server-side dedup guard so rapid duplicate requests (e.g. double-click
+// race before the frontend disables the button) cannot start two agent processes.
+const activeTestIds = new Set<string>()
+
+// Track all spawned agent processes so we can kill them on server shutdown.
+// Key = testId, Value = ChildProcess. Prevents orphaned agent accumulation.
+const activeAgentProcesses = new Map<string, import('child_process').ChildProcess>()
+
+// Kill all tracked agent processes. Called on SIGTERM/SIGINT so restarts leave
+// no orphans competing for browser resources.
+export function killAllActiveAgents() {
+  if (activeAgentProcesses.size === 0) return
+  console.log(`[Shutdown] Killing ${activeAgentProcesses.size} active agent process(es)...`)
+  for (const [testId, proc] of activeAgentProcesses.entries()) {
+    try {
+      proc.kill('SIGKILL')
+      console.log(`[Shutdown] Killed agent for testId ${testId}`)
+    } catch (e) {
+      // already exited
+    }
+  }
+  activeAgentProcesses.clear()
+  activeTestIds.clear()
+}
+
 // Execute a test
 router.post('/execute', async (req: AuthRequest, res) => {
   const { testId, type, fileName, environmentUrl, environmentConfig, environmentName } = req.body
   const userId = req.user?.id || null
   const io = req.app.get('io')
   const executionId = uuidv4()
+  console.log(`[EXECUTE] Request received for testId=${testId}, type=${type}, file=${fileName}, URL=${environmentUrl}. Assigning executionId=${executionId}`);
+
+  // Reject duplicate concurrent execution for the same testId.
+  if (activeTestIds.has(testId)) {
+    return res.status(409).json({
+      success: false,
+      message: `Test ${testId} is already running. Please wait for it to complete.`,
+    })
+  }
+  activeTestIds.add(testId)
 
   try {
     // Determine test file path
@@ -280,26 +344,47 @@ router.post('/execute', async (req: AuthRequest, res) => {
     // Check if file exists
     try {
       await fs.access(testFile)
-    } catch {
+      console.log(`[EXECUTE] File exists at ${testFile}.`);
+    } catch (e) {
+      console.error(`[EXECUTE] File not found error for ${testFile}:`, e);
+      activeTestIds.delete(testId)
       return res.status(404).json({ 
         success: false, 
         message: `Test file not found: ${fileName}` 
       })
     }
 
-    // Emit start event
-    io.emit(`test:${testId}:status`, {
+    // Emit start event — include executionId so the client can discard events
+    // from stale runs of the same testId (different executionId = different run).
+    const startEvent = {
       status: 'running',
       progress: 0,
+      executionId,
       message: 'Starting test execution...',
+    };
+    console.log(`[SOCKET_EMIT] event=test:${testId}:status payload=`, startEvent);
+    io.emit(`test:${testId}:status`, startEvent)
+
+    // Send HTTP response IMMEDIATELY — this unblocks the client's PENDING_EXECUTION
+    // sentinel so it can accept socket progress/completion events. DB INSERT and
+    // agent spawn happen asynchronously below WITHOUT blocking this response.
+    // Critically: if the DB is unreachable (timeout = 5s), the old await caused a
+    // 5-second HTTP delay during which stale socket events could trigger false failures.
+    res.json({
+      success: true,
+      executionId,
+      message: 'Test execution started',
     })
 
-    // Store execution in database
-    await pool.query(
+    // Store execution in database — fire-and-forget, non-blocking.
+    // A DB hiccup must never delay the agent spawn or the HTTP response.
+    pool.query(
       `INSERT INTO test_executions (id, user_id, test_name, test_type, file_name, status, started_at)
        VALUES ($1, $2, $3, $4, $5, 'running', NOW())`,
       [executionId, userId, fileName.replace(/\.(md|json|yaml)$/, ''), type, fileName]
-    )
+    ).catch((dbInsertErr: Error) => {
+      console.warn(`[Test ${testId}] DB INSERT failed (non-fatal):`, dbInsertErr.message)
+    })
 
     // For UI tests, use the AI agent
     if (type === 'ui') {
@@ -308,6 +393,16 @@ router.post('/execute', async (req: AuthRequest, res) => {
       // Build environment variables
       const agentEnv = { ...process.env }
       agentEnv.AGENT_KEEP_BROWSER_OPEN = 'false' // Ensure browser closes
+      // Fast-mode defaults for UI module runs; can be overridden via env vars.
+      // Default headless to false so browser is visible unless explicitly enabled.
+      const effectiveUiHeadless = parseBooleanEnv(process.env.UI_TEST_HEADLESS, false)
+      agentEnv.BROWSER_HEADLESS = effectiveUiHeadless ? 'true' : 'false'
+      agentEnv.BROWSER_SLOW_MO = process.env.UI_TEST_SLOW_MO ?? '0'
+      agentEnv.AGENT_MAX_RETRIES = process.env.UI_TEST_MAX_RETRIES ?? '1'
+      agentEnv.AGENT_RETRY_DELAY = process.env.UI_TEST_RETRY_DELAY ?? '300'
+      agentEnv.WAIT_DURATION_SCALE = process.env.UI_TEST_WAIT_SCALE ?? '0.8'
+      console.log(`[UI Test ${testId}]   UI_TEST_HEADLESS(raw): ${process.env.UI_TEST_HEADLESS ?? 'not-set'}`)
+      console.log(`[UI Test ${testId}]   BROWSER_HEADLESS(effective): ${agentEnv.BROWSER_HEADLESS}`)
       
       // Determine environment type from environment name first, then fall back to URL detection
       let env: EnvironmentType | null = null
@@ -357,7 +452,7 @@ router.post('/execute', async (req: AuthRequest, res) => {
       // Override with provided credentials if any (takes precedence)
       if (environmentConfig?.username) {
         agentEnv.APP_USERNAME = environmentConfig.username
-        console.log(`[UI Test ${testId}] Overriding with provided username: ${environmentConfig.username}`)
+        console.log(`[UI Test ${testId}] Overriding with provided username: ${maskForLog(environmentConfig.username, 3)}`)
       }
       if (environmentConfig?.password) {
         agentEnv.APP_PASSWORD = environmentConfig.password
@@ -367,16 +462,36 @@ router.post('/execute', async (req: AuthRequest, res) => {
       // Log final environment configuration
       console.log(`[UI Test ${testId}] Final configuration:`)      
       console.log(`[UI Test ${testId}]   APP_URL: ${agentEnv.APP_URL}`)      
-      console.log(`[UI Test ${testId}]   APP_USERNAME: ${agentEnv.APP_USERNAME}`)
+      console.log(`[UI Test ${testId}]   APP_USERNAME: ${maskForLog(agentEnv.APP_USERNAME, 3)}`)
       
-      // Run the AI agent
-      const agentProcess = spawn('node', [
-        path.join(basePath, 'dist/index.js'),
-        testFile,
-      ], {
+      // Run the AI agent. Prefer built output, but fall back to ts-node in dev.
+      const distEntry = path.join(basePath, 'dist/index.js')
+      const srcEntry = path.join(basePath, 'src/index.ts')
+      let agentCommand = 'node'
+      let agentArgs = [distEntry, testFile]
+      let useShell = false
+
+      try {
+        await fs.access(distEntry)
+      } catch {
+        agentCommand = 'npx'
+        // --transpile-only skips TypeScript type-checking, cutting startup from ~30s to ~5s.
+        // Type safety is guaranteed at dev time via tsc; skipping it at runtime is safe here.
+        agentArgs = ['--yes', 'ts-node', '--transpile-only', srcEntry, testFile]
+        useShell = process.platform === 'win32'
+        console.warn(`[UI Test ${testId}] dist/index.js not found, using ts-node --transpile-only fallback`) 
+      }
+
+      console.log(`[EXECUTE] Spawning agent with COMMAND=${agentCommand}, ARGS=${agentArgs.join(' ')}, shell=${useShell}`);
+      const agentProcess = spawn(agentCommand, agentArgs, {
         cwd: basePath,
-        env: agentEnv,
+        env: buildChildEnv(agentEnv),
+        shell: useShell,
       })
+      console.log(`[EXECUTE] Agent spawned successfully with PID=${agentProcess.pid}`);
+      
+      // Register process so it can be killed on server shutdown (prevents orphans).
+      activeAgentProcesses.set(testId, agentProcess)
 
       let output = ''
       let errorOutput = ''
@@ -403,11 +518,14 @@ router.post('/execute', async (req: AuthRequest, res) => {
           if (progress > maxProgress) {
             maxProgress = progress
             console.log(`[Test ${testId}] Progress update: ${current}/${total} = ${progress}%`)
-            io.emit(`test:${testId}:status`, {
+            const progressEvent = {
               status: 'running',
               progress,
+              executionId,
               message: `Executing step ${current} of ${total}...`,
-            })
+            };
+            console.log(`[SOCKET_EMIT] event=test:${testId}:status payload=`, progressEvent);
+            io.emit(`test:${testId}:status`, progressEvent)
           }
         }
       })
@@ -423,6 +541,13 @@ router.post('/execute', async (req: AuthRequest, res) => {
         processExited = true
         
         console.log(`[Test ${testId}] Process exited with code ${code}, signal ${signal}`)
+        // Deregister from active process map on any exit.
+        activeAgentProcesses.delete(testId)
+
+        // Surface agent stderr when the process fails — critical for diagnosing test errors.
+        if ((code !== 0 || signal) && errorOutput && errorOutput.trim()) {
+          console.error(`[Test ${testId}] Agent stderr (last 3000 chars):\n${errorOutput.slice(-3000)}`)
+        }
         
         const duration = Date.now() - startTime
         const success = code === 0 && !signal
@@ -458,12 +583,15 @@ router.post('/execute', async (req: AuthRequest, res) => {
         const completionEvent = {
           status: success ? 'passed' : 'failed',
           progress: 100,  // ALWAYS 100 on completion
+          executionId,
           duration,
           reportPath,
           message: success ? 'Test completed successfully' : 'Test failed',
         }
-        console.log(`[Test ${testId}] Emitting completion:`, completionEvent)
+        console.log(`[SOCKET_EMIT] event=test:${testId}:status payload=`, completionEvent);
         io.emit(`test:${testId}:status`, completionEvent)
+        // Release dedup guard so the test can be run again.
+        activeTestIds.delete(testId)
       }
 
       agentProcess.on('close', (code) => exitHandler(code, null))
@@ -486,12 +614,7 @@ router.post('/execute', async (req: AuthRequest, res) => {
         clearTimeout(timeoutHandle)
       })
 
-      // Return immediately, let the process run in background
-      res.json({
-        success: true,
-        executionId,
-        message: 'Test execution started',
-      })
+      // res.json() was already sent above — nothing to return here.
     } else {
       // For API tests (Playwright spec files), execute them using npx playwright test
       const startTime = Date.now()
@@ -509,10 +632,11 @@ router.post('/execute', async (req: AuthRequest, res) => {
         console.warn(`Could not read test config from ${fileName}, using as spec file directly`)
       }
 
-      // Emit start event
+      // Emit start event (include executionId for stale-event guard on client)
       io.emit(`test:${testId}:status`, {
         status: 'running',
         progress: 10,
+        executionId,
         message: 'Starting API test execution...',
       })
 
@@ -572,16 +696,16 @@ router.post('/execute', async (req: AuthRequest, res) => {
       
       if (apiKey) {
         apiTestEnv.API_KEY = apiKey
-        console.log(`[API Test ${testId}] Using API Key: ${apiKey.substring(0, 8)}...`)
+        console.log(`[API Test ${testId}] Using API Key: ${maskForLog(apiKey, 4)}`)
       }
       if (clientId) {
         apiTestEnv.API_CLIENT_ID = clientId
-        console.log(`[API Test ${testId}] Using Client ID: ${clientId}`)
+        console.log(`[API Test ${testId}] Using Client ID: ${maskForLog(clientId, 2)}`)
       }
       
       exec(command, {
         cwd: basePath,
-        env: apiTestEnv,
+        env: buildChildEnv(apiTestEnv),
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
       }, async (error, stdout, stderr) => {
         const testOutput = stdout
@@ -636,6 +760,8 @@ router.post('/execute', async (req: AuthRequest, res) => {
           failed,
           total,
         })
+        // Release dedup guard so the test can be run again.
+        activeTestIds.delete(testId)
       })
 
       res.json({
@@ -645,18 +771,38 @@ router.post('/execute', async (req: AuthRequest, res) => {
       })
     }
   } catch (error) {
-    console.error('Test execution error:', error)
-    
-    io.emit(`test:${testId}:status`, {
-      status: 'failed',
-      progress: 100,
-      message: 'Test execution failed',
-    })
+    console.error(`[EXECUTE] Test execution error caught in outer catch (testId=${testId}):`, error)
+    activeTestIds.delete(testId)
 
-    res.status(500).json({
-      success: false,
-      message: 'Failed to execute test',
-    })
+    // If an agent process was already spawned when the error occurred, kill it and
+    // let its exitHandler emit the terminal status. Emitting 'failed' here while
+    // the agent is still running causes conflicting socket events (failed + running)
+    // that make the UI card bounce between statuses.
+    const orphanProc = activeAgentProcesses.get(testId)
+    if (orphanProc) {
+      try { orphanProc.kill('SIGKILL') } catch {}
+      activeAgentProcesses.delete(testId)
+      // exitHandler will emit {status: 'failed'} via the process 'close' event.
+    } else {
+      // Agent was never spawned — emit 'failed' directly since no exitHandler will fire.
+      const failEvent = {
+        status: 'failed',
+        progress: 100,
+        executionId,
+        message: 'Test execution failed',
+      };
+      console.log(`[SOCKET_EMIT] event=test:${testId}:status payload=`, failEvent);
+      io.emit(`test:${testId}:status`, failEvent)
+    }
+
+    // Only send an HTTP error response if we haven't already sent res.json() above.
+    // (For UI tests, res.json() is now sent before spawn, so headersSent = true here.)
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to execute test',
+      })
+    }
   }
 })
 
@@ -674,6 +820,34 @@ router.get('/execution/:id', async (req, res) => {
     }
 
     const execution = result.rows[0]
+
+    // Guard against stale executions that never received a terminal update.
+    // Only apply the timeout guard if no active agent process is currently running for
+    // that test. This prevents premature 'failed' while an agent is still starting up.
+    const startedAt = execution.started_at ? new Date(execution.started_at).getTime() : null
+    const isRunningTooLong =
+      execution.status === 'running' &&
+      !execution.completed_at &&
+      startedAt !== null &&
+      Date.now() - startedAt > 10 * 60 * 1000  // 10 minutes
+
+    // Check if there's an active agent process by looking through all running processes
+    const hasActiveAgent = Array.from(activeAgentProcesses.values()).some(proc => !proc.exitCode && !proc.signalCode)
+
+    if (isRunningTooLong && !hasActiveAgent) {
+      await pool.query(
+        `UPDATE test_executions
+         SET status = 'failed',
+             error_message = COALESCE(error_message, 'Execution timed out - no active agent process'),
+             completed_at = NOW()
+         WHERE id = $1`,
+        [id]
+      )
+
+      execution.status = 'failed'
+      execution.error_message = execution.error_message || 'Execution timed out - no active agent process'
+      execution.completed_at = new Date().toISOString()
+    }
     
     // Parse response_data if it's a JSON string
     if (execution.response_data && typeof execution.response_data === 'string') {
