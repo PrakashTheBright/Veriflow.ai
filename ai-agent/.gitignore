@@ -25,6 +25,18 @@ logs/*.json
 reports/output/*
 !reports/output/.gitkeep
 
+# Screenshots (generated during test runs)
+reports/screenshots/*
+!reports/screenshots/.gitkeep
+
+# Test results
+test-results/*
+!test-results/.gitkeep
+
+# UI server/frontend logs
+veriflow-ui/frontend_log.txt
+veriflow-ui/server_log.txt
+
 # IDE
 .idea/
 *.swp
