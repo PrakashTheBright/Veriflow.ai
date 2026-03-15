@@ -621,7 +621,7 @@ export default function UITestingPage() {
               </button>
               <button
                 onClick={runAllTests}
-                disabled={runningAll || tests.some(t => t.status === 'running')}
+                disabled={runningAll}
                 className="btn-primary flex items-center gap-2 disabled:opacity-50 hover:scale-105 transition-transform"
               >
                 {runningAll ? (
@@ -708,9 +708,8 @@ export default function UITestingPage() {
                       e.stopPropagation()
                       runTest(test.id)
                     }}
-                    disabled={tests.some(t => t.status === 'running')}
-                    title={tests.some(t => t.status === 'running') ? 'A test is already running. Please wait.' : 'Run test'}
-                    className="p-2 rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={test.status === 'running'}
+                    className="p-2 rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
                   >
                     {test.status === 'running' ? (
                       <Loader2 className="w-5 h-5 text-neon-blue animate-spin" />
