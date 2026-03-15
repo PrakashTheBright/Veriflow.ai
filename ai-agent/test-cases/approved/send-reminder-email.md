@@ -29,7 +29,7 @@
 22. log text from selector .ant-table-row:first-child>>td:nth-child(8) label "Role"
 23. log text from selector .ant-table-row:first-child>>td:nth-child(9) label "Expiry"
 
-24. force click on selector .ant-table-row:first-child >> role=button[name="ellipsis"]
+24. force click on selector .ant-table-tbody tr:first-child .ant-dropdown-trigger
 25. wait 1 second
 26. click on selector .ant-dropdown-menu-title-content:has-text("Send Reminder Email")
 27. wait 2 seconds
