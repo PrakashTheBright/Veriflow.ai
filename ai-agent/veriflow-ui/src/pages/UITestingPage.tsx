@@ -402,9 +402,21 @@ export default function UITestingPage() {
         )
         startExecutionPolling(testId, response.executionId)
       } else {
-        // Server returned success but no executionId — clear PENDING so socket
-        // events are not permanently blocked on this test card.
+        // Server returned HTTP 200 but no executionId (unexpected). Clear the
+        // PENDING sentinel so socket events are not permanently blocked, then
+        // restore the card to pending so the user can retry rather than getting
+        // stuck on a phantom Running state with no way to resolve it.
         expectedExecutionIdRef.current.delete(testId)
+        setTests((prev) =>
+          prev.map((t) =>
+            t.id === testId ? { ...t, status: 'pending', progress: 0 } : t
+          )
+        )
+        toast.error('Server did not return an execution ID. Please retry.')
+        runningGuardRef.current.delete(testId)
+        unsubscribeRefs.current.get(testId)?.()
+        unsubscribeRefs.current.delete(testId)
+        complete()
       }
     } catch (error) {
       console.error(`[runTest Error] testId=${testId}:`, error);
@@ -429,12 +441,15 @@ export default function UITestingPage() {
         runningGuardRef.current.delete(testId)
         complete()
       } else {
+        // Generic HTTP / network error — the test execution REQUEST failed, not
+        // the test itself. Don't mark the card as Failed (that status is reserved
+        // for actual test failures). Restore to pending so the user can retry.
         setTests((prev) =>
           prev.map((t) =>
-            t.id === testId ? { ...t, status: 'failed', progress: 100 } : t
+            t.id === testId ? { ...t, status: 'pending', progress: 0 } : t
           )
         )
-        toast.error(`Error: ${message}`)
+        toast.error(`Could not start test: ${message}`)
         stopExecutionPolling(testId)
         unsubscribeRefs.current.get(testId)?.()
         unsubscribeRefs.current.delete(testId)

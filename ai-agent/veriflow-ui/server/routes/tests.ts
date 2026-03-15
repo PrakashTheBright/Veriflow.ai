@@ -360,6 +360,21 @@ router.post('/execute', async (req: AuthRequest, res) => {
       })
     }
 
+    // For UI tests, enforce the global one-at-a-time constraint HERE — before
+    // io.emit() or res.json() are called. The check was previously inside the
+    // if(type==='ui') block AFTER res.json(), which caused "headers already sent"
+    // when res.status(409).json() was called on a committed response. The resulting
+    // exception triggered the outer catch, which emitted a spurious socket
+    // {status:'failed'} event — making the UI card flip to Failed immediately
+    // while the actual test was still running (from a previous or parallel session).
+    if (type === 'ui' && activeUITestId !== null) {
+      activeTestIds.delete(testId)
+      return res.status(409).json({
+        success: false,
+        message: `Another UI test is currently running (${activeUITestId}). Please wait for it to complete before starting a new one.`,
+      })
+    }
+
     // Emit start event — include executionId so the client can discard events
     // from stale runs of the same testId (different executionId = different run).
     const startEvent = {
@@ -397,13 +412,7 @@ router.post('/execute', async (req: AuthRequest, res) => {
       // Enforce global one-at-a-time constraint for UI tests.
       // Running multiple Playwright browsers concurrently exhausts memory and causes
       // "Target page, context or browser has been closed" failures mid-test.
-      if (activeUITestId !== null) {
-        activeTestIds.delete(testId)
-        return res.status(409).json({
-          success: false,
-          message: `Another UI test is currently running (${activeUITestId}). Please wait for it to complete before starting a new one.`,
-        })
-      }
+      // NOTE: this check must NOT be repeated here — it is done before res.json() above.
       activeUITestId = testId
       console.log(`[UI Test ${testId}] Acquired global UI test lock`)
 
