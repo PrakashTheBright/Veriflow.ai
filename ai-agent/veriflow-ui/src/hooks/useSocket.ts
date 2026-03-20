@@ -48,14 +48,20 @@ export function useSocket() {
   const subscribeToTest = useCallback((testId: string, callback: TestStatusCallback) => {
     if (!socketRef.current) return
 
-    // Store callback
-    listenersRef.current.set(testId, callback)
-
-    // Subscribe to test updates
-    socketRef.current.emit('subscribe:test', testId)
-
-    // Listen for status updates
     const eventName = `test:${testId}:status`
+
+    // Remove any previously registered listener for this testId to prevent accumulation.
+    // socket.on() is additive — without this guard, multiple calls stack listeners and
+    // each socket event fires once per accumulated listener.
+    const prev = listenersRef.current.get(testId)
+    if (prev) {
+      socketRef.current.off(eventName, prev)
+      listenersRef.current.delete(testId)
+    }
+
+    // Store new callback and register exactly one listener
+    listenersRef.current.set(testId, callback)
+    socketRef.current.emit('subscribe:test', testId)
     socketRef.current.on(eventName, callback)
 
     // Return unsubscribe function

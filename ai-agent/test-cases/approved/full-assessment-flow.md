@@ -35,7 +35,7 @@
 ## Resume Section
 25. click on "Resume File"
 26. wait 2 seconds
-27. upload file "c:\Users\Prakash Shinde\OneDrive - Prismforce India Private Limited\Desktop\SelectPrism Docs\prakash_Shinde_4yrs_EXP.docx"
+27. upload file "C:\Users\Prismforce_ai\OneDrive - Prismforce India Private Limited\Desktop\SelectPrism Docs\prakash_Shinde_4yrs_EXP.docx"
 28. click on "Upload"
 29. wait 5 seconds
 30. click on .ant-checkbox-input

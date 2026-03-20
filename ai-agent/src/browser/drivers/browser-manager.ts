@@ -105,13 +105,18 @@ export class BrowserManager {
   }
 
   /**
-   * Get environment information
+   * Get environment information — safe: returns fallback values if the page
+   * is already closed (e.g. when a failing action caused the browser to crash).
    */
   async getEnvironmentInfo(): Promise<ExecutionEnvironment> {
-    const userAgent = this.page 
-      ? await this.page.evaluate(() => navigator.userAgent)
-      : 'N/A';
-
+    let userAgent = 'N/A';
+    try {
+      if (this.page && !this.page.isClosed()) {
+        userAgent = await this.page.evaluate(() => navigator.userAgent);
+      }
+    } catch {
+      // Page or browser already closed — use safe fallback.
+    }
     return {
       browser: 'chromium',
       browserVersion: this.browser?.version() || 'unknown',

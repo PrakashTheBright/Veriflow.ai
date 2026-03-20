@@ -7,7 +7,12 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { AgentConfig } from '../types';
 
-// Load environment variables from the project root
+// Load environment variables from the project root.
+// Do NOT use override:true here — when the agent is spawned from the veriflow-ui
+// server route, the server sets critical env vars (BROWSER_HEADLESS, AGENT_KEEP_BROWSER_OPEN,
+// BROWSER_SLOW_MO, etc.) in the spawn environment. Those values must take precedence
+// over what is written in the .env file, otherwise .env values (e.g. AGENT_KEEP_BROWSER_OPEN=true)
+// would override the server's intent (e.g. 'false') and cause browsers to accumulate.
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 function getEnvString(key: string, defaultValue: string): string {

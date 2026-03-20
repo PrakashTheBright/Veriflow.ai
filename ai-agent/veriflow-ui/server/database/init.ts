@@ -2,7 +2,19 @@ import { Pool } from 'pg'
 import dotenv from 'dotenv'
 import path from 'path'
 
-dotenv.config({ path: path.join(__dirname, '../../.env') })
+// Load environment variables from both ai-agent/.env and veriflow-ui/.env.
+// In dev: __dirname = veriflow-ui/server/database
+// In dist: __dirname = veriflow-ui/dist/server/database
+const isProduction = __dirname.includes(path.join('dist', 'server', 'database')) || __dirname.includes('dist\\server\\database')
+const primaryEnvPath = isProduction
+  ? path.join(__dirname, '../../../../.env')
+  : path.join(__dirname, '../../../.env')
+const fallbackEnvPath = isProduction
+  ? path.join(__dirname, '../../../.env')
+  : path.join(__dirname, '../../.env')
+
+dotenv.config({ path: primaryEnvPath, override: true })
+dotenv.config({ path: fallbackEnvPath, override: true })
 
 // Helper to ensure required env vars exist (for TypeScript type narrowing)
 function requireEnv(name: string): string {
@@ -21,6 +33,10 @@ const pool = new Pool({
   database: process.env.DB_NAME || 'veriflow',
   user: process.env.DB_USER || 'postgres',
   password: requireEnv('DB_PASSWORD'),
+  // Fail fast on DB unavailability. Without these, a dropped connection hangs
+  // indefinitely and blocks the entire request (including spawning the agent).
+  connectionTimeoutMillis: 5000,
+  statement_timeout: 8000,
 })
 
 let dbAvailable = false

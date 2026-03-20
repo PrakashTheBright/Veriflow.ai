@@ -30,7 +30,7 @@
 23. log text from selector .ant-table-row:first-child>>td:nth-child(9) label "Original Expiry"
 
 ## Extend Interview Expiry for First Candidate
-24. force click on selector .ant-table-row:first-child >> role=button[name="ellipsis"]
+24. force click on selector .ant-table-tbody tr:first-child .ant-dropdown-trigger
 25. wait 1 second
 26. click on selector .ant-dropdown-menu-title-content:has-text("Extend Interview Expiry")
 27. wait 2 seconds
