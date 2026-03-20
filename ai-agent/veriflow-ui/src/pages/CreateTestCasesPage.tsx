@@ -1,24 +1,24 @@
 import { useState, useEffect } from 'react'
-import { FileText, Code, Sparkles, Download, Upload, CheckCircle2, ClipboardList, X, Check, Square, CheckSquare, LayoutTemplate, ChevronDown, ChevronUp, Copy, History } from 'lucide-react'
+import { FileText, Code, Sparkles, Download, Upload, CheckCircle2, ClipboardList, X, Check, LayoutTemplate, ChevronDown, ChevronUp, Copy, History, Trash2, Save } from 'lucide-react'
 import toast from 'react-hot-toast'
 import TestCaseHistoryModal from '../components/TestCaseHistoryModal'
 
 // Template field configurations
 const UI_TEST_TEMPLATE_FIELDS = [
   { key: 'testCaseId', label: 'Test Case ID', required: true },
-  { key: 'moduleName', label: 'Module Name', required: false },
+  { key: 'testCaseTitle', label: 'Test Case Title / Name', required: true },
+  { key: 'moduleName', label: 'Module', required: true },
+  { key: 'testType', label: 'Test Type', required: true },
+  { key: 'preconditions', label: 'Preconditions', required: true },
+  { key: 'testData', label: 'Test Data', required: true },
+  { key: 'testSteps', label: 'Test Steps', required: true },
+  { key: 'expectedResult', label: 'Expected Result', required: true },
+  { key: 'actualResult', label: 'Actual Result', required: true },
+  { key: 'status', label: 'Status', required: true },
   { key: 'featureName', label: 'Feature Name', required: false },
-  { key: 'testCaseTitle', label: 'Test Case Title', required: true },
   { key: 'requirementId', label: 'Requirement ID', required: false },
   { key: 'priority', label: 'Priority', required: false },
   { key: 'severity', label: 'Severity', required: false },
-  { key: 'testType', label: 'Test Type', required: false },
-  { key: 'preconditions', label: 'Preconditions', required: false },
-  { key: 'testData', label: 'Test Data', required: false },
-  { key: 'testSteps', label: 'Test Steps', required: true },
-  { key: 'expectedResult', label: 'Expected Result', required: true },
-  { key: 'actualResult', label: 'Actual Result', required: false },
-  { key: 'status', label: 'Status', required: false },
   { key: 'environment', label: 'Environment', required: false },
   { key: 'buildVersion', label: 'Build Version', required: false },
   { key: 'executedBy', label: 'Executed By', required: false },
@@ -60,10 +60,15 @@ export default function CreateTestCasesPage() {
   const [uploadedFileContent, setUploadedFileContent] = useState<string>('')
   const [generatedTestCases, setGeneratedTestCases] = useState<GeneratedTestCaseData[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isReadingFile, setIsReadingFile] = useState(false)
   const [downloadFormat, setDownloadFormat] = useState<'md' | 'json' | 'csv'>('csv')
   const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set())
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false)
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set())
+  const [editingCell, setEditingCell] = useState<{ rowIndex: number; fieldKey: string } | null>(null)
+  const [editCellValue, setEditCellValue] = useState<string>('')
+  const [isSaving, setIsSaving] = useState(false)
 
   // Load test cases from history
   const handleLoadFromHistory = (testCases: any[], name: string, type: 'ui' | 'api') => {
@@ -104,12 +109,11 @@ export default function CreateTestCasesPage() {
       .map(field => field.key)
     setSelectedFields(new Set(requiredFields))
     setGeneratedTestCases([])
+    setSelectedRows(new Set())
+    setEditingCell(null)
   }, [testType])
 
   const handleFieldToggle = (fieldKey: string) => {
-    const field = currentTemplateFields.find(f => f.key === fieldKey)
-    if (field?.required) return // Cannot deselect required fields
-    
     const newSelected = new Set(selectedFields)
     if (newSelected.has(fieldKey)) {
       newSelected.delete(fieldKey)
@@ -130,49 +134,144 @@ export default function CreateTestCasesPage() {
     setSelectedFields(new Set(requiredFields))
   }
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // ── Row selection ──────────────────────────────────────────────────────────
+  const toggleRowSelection = (index: number) => {
+    setSelectedRows(prev => {
+      const s = new Set(prev)
+      if (s.has(index)) s.delete(index)
+      else s.add(index)
+      return s
+    })
+  }
+
+  const toggleAllRows = () => {
+    if (selectedRows.size === generatedTestCases.length && generatedTestCases.length > 0) {
+      setSelectedRows(new Set())
+    } else {
+      setSelectedRows(new Set(generatedTestCases.map((_, i) => i)))
+    }
+  }
+
+  // ── Inline cell editing ────────────────────────────────────────────────────
+  const startCellEdit = (rowIndex: number, fieldKey: string) => {
+    const current = generatedTestCases[rowIndex]?.[fieldKey]
+    const display = Array.isArray(current)
+      ? (current as string[]).join('\n')
+      : String(current ?? '')
+    setEditingCell({ rowIndex, fieldKey })
+    setEditCellValue(display)
+  }
+
+  const commitCellEdit = () => {
+    if (!editingCell) return
+    const { rowIndex, fieldKey } = editingCell
+    const original = generatedTestCases[rowIndex]?.[fieldKey]
+    const newValue: string | string[] = Array.isArray(original)
+      ? editCellValue.split('\n').filter(s => s.trim())
+      : editCellValue
+    const updated = [...generatedTestCases]
+    updated[rowIndex] = { ...updated[rowIndex], [fieldKey]: newValue }
+    setGeneratedTestCases(updated)
+    setEditingCell(null)
+    setEditCellValue('')
+  }
+
+  const cancelCellEdit = () => {
+    setEditingCell(null)
+    setEditCellValue('')
+  }
+
+  // ── Delete selected rows ───────────────────────────────────────────────────
+  const handleDeleteSelectedRows = () => {
+    const count = selectedRows.size
+    const remaining = generatedTestCases.filter((_, i) => !selectedRows.has(i))
+    setGeneratedTestCases(remaining)
+    setSelectedRows(new Set())
+    toast.success(`${count} row(s) deleted`)
+  }
+
+  // ── Save test cases ────────────────────────────────────────────────────────
+  const handleSaveTestCases = async () => {
+    if (generatedTestCases.length === 0) {
+      toast.error('No test cases to save')
+      return
+    }
+    setIsSaving(true)
+    try {
+      const historyEntry = {
+        testCaseName,
+        testType,
+        inputSource: (testContent.trim() && uploadedFile) ? 'both'
+          : uploadedFile ? 'file'
+          : 'description',
+        inputFileName: uploadedFile?.name,
+        inputDescription: testContent.trim() || undefined,
+        testCases: generatedTestCases,
+        selectedFields: Array.from(selectedFields),
+        createdBy: 'User'
+      }
+      const res = await fetch('http://localhost:4000/api/testcase-history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(historyEntry)
+      })
+      if (!res.ok) throw new Error('Save failed')
+      toast.success('Test cases saved successfully!')
+    } catch {
+      toast.error('Failed to save test cases')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file) {
-      setUploadedFile(file)
-      
-      // Read file content for text-based files
-      const reader = new FileReader()
-      reader.onload = (event) => {
-        const content = event.target?.result as string
-        if (content) {
-          // Limit content to first 15000 characters to avoid token limits
-          const truncatedContent = content.length > 15000 
-            ? content.substring(0, 15000) + '\n\n... (content truncated for processing)'
-            : content
-          setUploadedFileContent(truncatedContent)
-          toast.success(`File "${file.name}" uploaded and content extracted successfully`)
-        }
+    if (!file) return
+
+    setUploadedFile(file)
+    setUploadedFileContent('')
+    setIsReadingFile(true)
+
+    try {
+      // Upload file to server for extraction (handles text, PDF, DOCX, etc.)
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const response = await fetch('http://localhost:4000/api/testcases/parse-file', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Unable to read uploaded file')
       }
-      reader.onerror = () => {
-        toast.error('Failed to read file content')
+
+      if (data.isBinary) {
+        // Image or unextractable file – let user know and allow description input
         setUploadedFileContent('')
-      }
-      
-      // Determine if file is text-based
-      const textExtensions = ['.json', '.md', '.txt', '.csv', '.yaml', '.yml', '.js', '.ts', '.jsx', '.tsx', '.xml', '.html', '.sql']
-      const isTextFile = file.type.includes('text') || 
-                         file.type === 'application/json' ||
-                         file.type === 'application/xml' ||
-                         textExtensions.some(ext => file.name.toLowerCase().endsWith(ext))
-      
-      if (isTextFile) {
-        reader.readAsText(file)
+        toast(`File "${file.name}" uploaded. ${data.message}`)
+      } else if (data.extractedText && data.extractedText.trim().length > 0) {
+        setUploadedFileContent(data.extractedText)
+        toast.success(`File "${file.name}" uploaded and content extracted (${data.extractedText.length.toLocaleString()} chars)`)
       } else {
-        // For binary files (doc, docx, pdf), we can't read content directly
-        setUploadedFileContent(`[Binary file uploaded: ${file.name}]\n\nNote: This is a binary file format. Please paste the text content into the Test Description field for best results, or provide a summary of the file contents.`)
-        toast.info(`File "${file.name}" uploaded. Binary files may have limited analysis - consider pasting content into description.`)
+        setUploadedFileContent('')
+        toast(`File "${file.name}" uploaded but no text could be extracted. Add a description for better results.`)
       }
+    } catch (err: any) {
+      toast.error(err.message || 'Unable to read uploaded file')
+      setUploadedFile(null)
+      setUploadedFileContent('')
+    } finally {
+      setIsReadingFile(false)
     }
   }
 
   const removeFile = () => {
     setUploadedFile(null)
     setUploadedFileContent('')
+    setIsReadingFile(false)
   }
 
   const handleGenerate = async () => {
@@ -182,6 +281,10 @@ export default function CreateTestCasesPage() {
     }
     if (!testContent.trim() && !uploadedFile) {
       toast.error('Please enter Test Description or upload a file')
+      return
+    }
+    if (isReadingFile) {
+      toast.error('File is still being processed, please wait a moment')
       return
     }
     if (selectedFields.size === 0) {
@@ -218,7 +321,7 @@ export default function CreateTestCasesPage() {
 
       if (!response.ok) {
         const errorData = await response.json()
-        throw new Error(errorData.message || 'Failed to generate test case')
+        throw new Error(errorData.message || 'Test case generation failed. Please try again.')
       }
 
       const data = await response.json()
@@ -241,7 +344,7 @@ export default function CreateTestCasesPage() {
       setGeneratedTestCases(filteredTestCases)
       toast.success(`${filteredTestCases.length} test cases generated successfully!`)
       
-      // Save to history
+      // Save to history (auto-save after generation)
       try {
         const historyEntry = {
           testCaseName,
@@ -267,7 +370,7 @@ export default function CreateTestCasesPage() {
       }
     } catch (error: any) {
       console.error('Error generating test case:', error)
-      toast.error(error.message || 'Failed to generate test case')
+      toast.error(error.message || 'Test case generation failed. Please try again.')
     } finally {
       setIsGenerating(false)
     }
@@ -362,25 +465,6 @@ export default function CreateTestCasesPage() {
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
     toast.success(`Downloaded ${fileName}`)
-  }
-
-  const renderFieldValue = (fieldKey: string, value: string | string[] | undefined) => {
-    if (!value || value === '-') return <span className="text-gray-500 italic">Not specified</span>
-    if (Array.isArray(value)) {
-      return (
-        <div className="space-y-1">
-          {value.map((step, idx) => (
-            <div key={idx} className="flex gap-2 items-start">
-              <span className="flex-shrink-0 w-5 h-5 rounded bg-purple-500/20 flex items-center justify-center text-purple-400 text-xs font-medium">
-                {idx + 1}
-              </span>
-              <span className="text-gray-300 text-sm">{step}</span>
-            </div>
-          ))}
-        </div>
-      )
-    }
-    return <span className="text-gray-300">{value}</span>
   }
 
   const renderTableCellValue = (fieldKey: string, value: string | string[] | undefined, rowIndex: number) => {
@@ -706,6 +790,18 @@ export default function CreateTestCasesPage() {
               <div className="flex-1 h-px bg-gray-700"></div>
             </div>
 
+            {/* File priority notice */}
+            {testContent.trim() && uploadedFile && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                <div className="w-5 h-5 rounded-full bg-blue-500/20 flex items-center justify-center flex-shrink-0">
+                  <span className="text-blue-400 text-xs font-bold">i</span>
+                </div>
+                <p className="text-blue-400 text-xs">
+                  <span className="font-semibold">File input takes priority</span> over Description when both are provided.
+                </p>
+              </div>
+            )}
+
             {/* Upload File */}
             <div className={`bg-gray-900/50 border rounded-xl p-4 transition-all ${
               uploadedFile ? 'border-emerald-500/50' : (!testContent.trim() && !uploadedFile) ? 'border-amber-500/30' : 'border-gray-800'
@@ -747,17 +843,17 @@ export default function CreateTestCasesPage() {
                   <Upload className="w-5 h-5 text-gray-500" />
                   <span className="text-sm text-gray-400">Click to upload a file</span>
                   <span className="text-xs text-gray-500">
-                    {testType === 'ui' 
-                      ? 'Supports: .txt, .md, .json, .csv, .yaml, .yml, .doc, .docx' 
-                      : 'Supports: .json, .yaml, .yml, .txt, .md, .js, .ts'}
+                    {testType === 'ui'
+                      ? 'Supports: .txt, .md, .json, .csv, .jpg, .doc, .docx, .pdf'
+                      : 'Supports: .json, .yaml, .yml, .txt, .md, .js, .ts, .pdf, .doc, .docx'}
                   </span>
                   <input
                     type="file"
                     className="hidden"
                     onChange={handleFileUpload}
-                    accept={testType === 'ui' 
-                      ? '.txt,.md,.json,.csv,.yaml,.yml,.doc,.docx' 
-                      : '.json,.yaml,.yml,.txt,.md,.js,.ts'}
+                    accept={testType === 'ui'
+                      ? '.txt,.md,.json,.csv,.jpg,.jpeg,.doc,.docx,.pdf'
+                      : '.json,.yaml,.yml,.txt,.md,.js,.ts,.pdf,.doc,.docx'}
                   />
                 </label>
               )}
@@ -767,18 +863,18 @@ export default function CreateTestCasesPage() {
           {/* Generate Button */}
           <button
             onClick={handleGenerate}
-            disabled={isGenerating || selectedFields.size === 0 || (!testContent.trim() && !uploadedFile)}
+            disabled={isGenerating || isReadingFile || selectedFields.size === 0 || (!testContent.trim() && !uploadedFile)}
             className="flex-shrink-0 w-full py-3 bg-gradient-to-r from-cyan-500 to-purple-600 rounded-xl text-white font-semibold flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-purple-500/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isGenerating ? (
               <>
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Generating...
+                Generating test cases...
               </>
             ) : (
               <>
                 <Sparkles className="w-4 h-4" />
-                Generate Test Case ({selectedFields.size} fields)
+                Generate Test Cases ({selectedFields.size} fields)
               </>
             )}
           </button>
@@ -799,6 +895,27 @@ export default function CreateTestCasesPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {selectedRows.size > 0 && (
+                      <button
+                        onClick={handleDeleteSelectedRows}
+                        className="flex items-center gap-1 px-2 py-1 bg-red-600/80 hover:bg-red-500 rounded text-white text-xs font-medium transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        Delete ({selectedRows.size})
+                      </button>
+                    )}
+                    <button
+                      onClick={handleSaveTestCases}
+                      disabled={isSaving}
+                      className="flex items-center gap-1 px-2 py-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-white text-xs font-medium transition-colors"
+                    >
+                      {isSaving ? (
+                        <div className="w-3 h-3 border border-white/30 border-t-white rounded-full animate-spin" />
+                      ) : (
+                        <Save className="w-3 h-3" />
+                      )}
+                      Save
+                    </button>
                     <select
                       value={downloadFormat}
                       onChange={(e) => setDownloadFormat(e.target.value as 'csv' | 'json' | 'md')}
@@ -823,10 +940,16 @@ export default function CreateTestCasesPage() {
                   <table className="w-full border-collapse" style={{ tableLayout: 'auto' }}>
                     <thead className="sticky top-0 z-10">
                       <tr className="bg-gray-800">
-                        <th className="px-3 py-3 text-left border-b border-gray-700 bg-gray-800" style={{ minWidth: '50px', width: '50px' }}>
-                          <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">
-                            #
-                          </span>
+                        <th className="px-3 py-3 text-left border-b border-gray-700 bg-gray-800" style={{ minWidth: '64px', width: '64px' }}>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={selectedRows.size === generatedTestCases.length && generatedTestCases.length > 0}
+                              onChange={toggleAllRows}
+                              className="w-3.5 h-3.5 rounded accent-cyan-500 cursor-pointer"
+                            />
+                            <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">#</span>
+                          </div>
                         </th>
                         {currentTemplateFields
                           .filter(field => selectedFields.has(field.key))
@@ -857,8 +980,16 @@ export default function CreateTestCasesPage() {
                     <tbody>
                       {generatedTestCases.map((testCase, index) => (
                         <tr key={index} className={`${index % 2 === 0 ? 'bg-gray-900/30' : 'bg-gray-900/50'} hover:bg-gray-800/50 transition-colors`}>
-                          <td className="px-3 py-3 border-b border-gray-800/50 align-top" style={{ minWidth: '50px', width: '50px' }}>
-                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-gray-700 text-xs text-gray-300 font-medium">{index + 1}</span>
+                          <td className="px-3 py-3 border-b border-gray-800/50 align-top" style={{ minWidth: '64px', width: '64px' }}>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={selectedRows.has(index)}
+                                onChange={() => toggleRowSelection(index)}
+                                className="w-3.5 h-3.5 rounded accent-cyan-500 cursor-pointer"
+                              />
+                              <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gray-700 text-xs text-gray-300 font-medium">{index + 1}</span>
+                            </div>
                           </td>
                           {currentTemplateFields
                             .filter(field => selectedFields.has(field.key))
@@ -870,7 +1001,28 @@ export default function CreateTestCasesPage() {
                                   className="px-3 py-3 border-b border-gray-800/50 align-top"
                                   style={{ overflowWrap: 'break-word', wordBreak: 'break-word' }}
                                 >
-                                  {renderTableCellValue(field.key, value, index)}
+                                  {editingCell?.rowIndex === index && editingCell?.fieldKey === field.key ? (
+                                    <textarea
+                                      autoFocus
+                                      value={editCellValue}
+                                      onChange={(e) => setEditCellValue(e.target.value)}
+                                      onBlur={commitCellEdit}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Escape') cancelCellEdit()
+                                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitCellEdit() }
+                                      }}
+                                      className="w-full min-h-[60px] px-2 py-1 bg-gray-800 border border-cyan-500 rounded text-white text-sm resize-y focus:outline-none"
+                                      placeholder="Edit value (Shift+Enter for new line, Enter to save, Esc to cancel)"
+                                    />
+                                  ) : (
+                                    <div
+                                      className="cursor-text hover:bg-gray-700/20 rounded p-0.5 -m-0.5 transition-colors group relative"
+                                      onClick={() => startCellEdit(index, field.key)}
+                                      title="Click to edit"
+                                    >
+                                      {renderTableCellValue(field.key, value, index)}
+                                    </div>
+                                  )}
                                 </td>
                               )
                             })}
@@ -929,15 +1081,26 @@ export default function CreateTestCasesPage() {
                   .map((field) => {
                     const isSelected = selectedFields.has(field.key)
                     return (
-                      <div
+                      <button
                         key={field.key}
-                        className="flex items-center gap-2.5 p-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 mb-1.5"
+                        onClick={() => handleFieldToggle(field.key)}
+                        className={`w-full flex items-center gap-2.5 p-2 rounded-lg border transition-all text-left mb-1.5 ${
+                          isSelected
+                            ? 'border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/15'
+                            : 'border-gray-700/50 bg-gray-800/20 hover:border-gray-600 hover:bg-gray-800/40'
+                        }`}
                       >
-                        <div className="w-4 h-4 rounded bg-cyan-500 flex items-center justify-center flex-shrink-0">
-                          <Check className="w-2.5 h-2.5 text-white" />
+                        <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 ${
+                          isSelected ? 'bg-cyan-500' : 'border-2 border-gray-600'
+                        }`}>
+                          {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
                         </div>
-                        <span className="text-sm font-medium text-cyan-300 flex-1">{field.label}</span>
-                      </div>
+                        <span className={`text-sm font-medium flex-1 ${
+                          isSelected ? 'text-cyan-300' : 'text-gray-400'
+                        }`}>
+                          {field.label}
+                        </span>
+                      </button>
                     )
                   })}
               </div>
