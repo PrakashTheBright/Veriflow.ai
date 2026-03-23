@@ -232,7 +232,7 @@ Return ONLY valid JSON. Do not add any markdown or explanation outside the JSON.
 Return ONLY valid JSON. Do not add any markdown or explanation outside the JSON.`
 
     const analysisUserPrompt = testType === 'ui'
-      ? `Read the following document carefully and extract a DEEP structured analysis for QA purposes.
+      ? `Read the following document carefully and extract a structured analysis.
 
 Test Case Name: ${testCaseName}
 Source: ${contentSource}
@@ -241,35 +241,27 @@ Source: ${contentSource}
 ${rawContent}
 === END DOCUMENT CONTENT ===
 
-Your goal is to identify EVERY possible testable scenario. Be extremely thorough:
-1. Identify all features and pages.
-2. For every user flow, identify positive paths, alternative paths, and what happens if a step is skipped or done out of order.
-3. For every form field, identify:
-   - Positive validation (valid data types, lengths)
-   - Negative validation (missing required fields, invalid formats, length violations)
-   - Boundary values (min, max, just below min, just above max)
-   - Edge cases (special characters, SQL injection characters, extremely long strings)
-4. Identify all business rules and their corresponding success and failure conditions.
-5. Identify all error conditions mentioned or implied.
+Extract EVERYTHING testable from the document above. Be thorough and specific — use the exact names, values, field names, and flows that appear in the document, not generic placeholders.
 
 Return a JSON object with this exact structure:
 {
   "summary": "One paragraph summary of what this document describes",
-  "module": "Module or application area name",
-  "features": ["List of distinct features or pages"],
+  "module": "Module or application area name (from the document)",
+  "features": ["List of distinct features or pages mentioned in the document"],
   "userFlows": [
-    { "flow": "Flow name", "steps": ["step 1", "step 2", ...], "preconditions": "any preconditions", "variations": ["positive", "negative", "edge case variants"] }
+    { "flow": "Flow name", "steps": ["step 1", "step 2", ...], "preconditions": "any preconditions" }
   ],
   "formFields": [
-    { "field": "Exact name", "type": "text/dropdown/etc", "required": true, "validations": ["rules"], "testScenarios": ["list of positive, negative, and boundary scenarios for THIS field"] }
+    { "field": "Exact field name from document", "type": "text/dropdown/checkbox/etc", "required": true, "validations": ["exact validation rules from document"] }
   ],
-  "businessRules": ["Rules and their constraints"],
-  "roles": ["User roles/permissions"],
+  "businessRules": ["Exact business rules stated in the document"],
+  "errorScenarios": ["Exact error conditions mentioned in the document"],
+  "roles": ["User roles or permission levels mentioned"],
   "testableScenarios": [
-    { "scenario": "Specific scenario description", "type": "positive/negative/edge/validation/boundary", "priority": "high/medium/low", "details": "what exactly to test" }
+    { "scenario": "Specific scenario description using document terminology", "type": "positive/negative/edge/validation", "priority": "high/medium/low" }
   ]
 }`
-      : `Read the following API document carefully and extract a DEEP structured analysis for QA purposes.
+      : `Read the following API document carefully and extract a structured analysis.
 
 Test Case Name: ${testCaseName}
 Source: ${contentSource}
@@ -278,40 +270,30 @@ Source: ${contentSource}
 ${rawContent}
 === END DOCUMENT CONTENT ===
 
-Your goal is to identify EVERY possible testable scenario for the APIs. Be extremely thorough:
-1. Use EXACT endpoint paths, methods, and field names.
-2. For every endpoint, identify:
-   - Successful execution scenarios (2xx).
-   - Validation failure scenarios (400) for every single input field (missing, wrong type, out of range).
-   - Authentication and Authorization failure scenarios (401, 403).
-   - Resource not found scenarios (404).
-   - Conflict or state-based errors (409, etc.).
-   - Edge cases (very large payloads, empty payloads, special characters in params).
-3. Identify all business rules and their success/failure conditions.
+Extract EVERYTHING testable from the document above. Use the EXACT endpoint paths, method names, field names, status codes, and response structures from the document — never use generic placeholders.
 
 Return a JSON object with this exact structure:
 {
-  "summary": "One paragraph summary",
-  "baseUrl": "Base URL",
-  "authType": "Authentication type",
+  "summary": "One paragraph summary of what this API document describes",
+  "baseUrl": "Base URL from the document",
+  "authType": "Authentication type (Bearer/API Key/OAuth2/None)",
   "endpoints": [
     {
-      "method": "...",
-      "path": "...",
-      "name": "...",
-      "description": "...",
+      "method": "GET/POST/PUT/DELETE/PATCH",
+      "path": "/exact/path/from/document",
+      "name": "Endpoint name",
+      "description": "What it does",
       "requestHeaders": { "Header-Name": "value" },
       "requestBody": { "field": "type/description" },
-      "queryParams": ["..."],
-      "pathParams": ["..."],
+      "queryParams": ["param1", "param2"],
+      "pathParams": ["id"],
       "successResponse": { "statusCode": 200, "body": {} },
-      "errorResponses": [{ "statusCode": 400, "description": "exact reason" }],
-      "testScenarios": ["List of specific positive and negative scenarios for this endpoint"]
+      "errorResponses": [{ "statusCode": 400, "description": "exact reason from doc" }]
     }
   ],
-  "businessRules": ["Rules"],
+  "businessRules": ["Exact business rules from the document"],
   "testableScenarios": [
-    { "endpointPath": "...", "method": "...", "scenario": "Specific description", "type": "success/validation/auth/notfound/edge/boundary", "expectedStatus": 200 }
+    { "endpointPath": "/exact/path", "method": "POST", "scenario": "Specific scenario", "type": "success/validation/auth/notfound/edge", "expectedStatus": 200 }
   ]
 }`
 
@@ -321,7 +303,7 @@ Return a JSON object with this exact structure:
         { role: 'user', content: analysisUserPrompt }
       ],
       model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
-      temperature: 0.3,
+      temperature: 0.1,
       max_tokens: 8000,
       response_format: { type: 'json_object' }
     })
@@ -351,8 +333,8 @@ Return a JSON object with this exact structure:
         {
           role: 'system',
           content: testType === 'ui'
-            ? 'You are a Senior QA Automation Architect. You will receive a structured document analysis. Your task is to generate a COMPREHENSIVE set of UI test cases that covers EVERY scenario, variation, field, and business rule identified in the analysis. For every form field, ensure there are both successful input tests and validation failure tests. Ensure maximum possible coverage for all user flows. Return only valid JSON, no markdown.'
-            : 'You are an expert API QA Architect. You will receive a structured document analysis. Your task is to generate a COMPREHENSIVE set of API test cases that covers EVERY endpoint, scenario, type (success, validation, auth, etc.), and edge case identified in the analysis. Use exact paths and methods. For every input field, ensure there are tests for valid and invalid data. Return only valid JSON, no markdown.'
+            ? 'You are a Senior QA Automation Architect. You will receive a structured document analysis (already extracted from the original document). Generate UI test cases STRICTLY and ONLY for the scenarios, features, fields, and flows present in the analysis. Every test case must be traceable to an item in the analysis. Do not invent anything not present in the analysis. Return only valid JSON, no markdown.'
+            : 'You are an expert API QA Architect. You will receive a structured document analysis (already extracted from the original API spec). Generate API test cases STRICTLY and ONLY for the endpoints, fields, and scenarios present in the analysis. Use the exact endpoint paths, methods, and field names from the analysis. Do not invent anything not present in the analysis. Return only valid JSON, no markdown.'
         },
         {
           role: 'user',
@@ -360,7 +342,7 @@ Return a JSON object with this exact structure:
         }
       ],
       model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
-      temperature: 0.3,
+      temperature: 0.2,
       max_tokens: 16000,
       response_format: { type: 'json_object' }
     })
@@ -489,11 +471,11 @@ ${uploadedFileName ? `File: ${uploadedFileName}\n` : ''}${originalSnippet}
 
 The document analysis below was produced by a previous AI step that carefully read the original document and extracted all testable requirements, features, fields, flows, and business rules.
 
-Your task: Generate a COMPREHENSIVE set of UI test cases based on the analysis below.
-- Maximum Coverage: Ensure every feature, user flow, form field, and business rule in the analysis is covered.
-- Diverse Scenarios: For each identified item, generate multiple test cases covering positive paths, negative paths (invalid input, mandatory fields), and edge cases (boundary values, special characters).
-- Specificity: Use exact field names and flow steps from the analysis.
-- Volume: Generate as many distinct test cases as needed to achieve deep coverage (typically 5-15 test cases for a standard feature).
+Your task: Generate UI test cases STRICTLY based on the analysis below.
+- Every test case must map to a specific item in the analysis (feature, user flow, form field, business rule, or testable scenario).
+- Cover: positive flows, negative/invalid input flows, edge cases, and validations — but ONLY for items that appear in the analysis.
+- Do NOT invent features, fields, or flows not present in the analysis.
+- Generate exactly as many test cases as the analysis genuinely supports.
 
 ${analysisBlock}
 
@@ -504,15 +486,15 @@ FIELD DEFINITIONS:
 - testCaseId: Unique identifier (TC_UI_001, TC_UI_002, ...)
 - moduleName: From analysis.module
 - featureName: From analysis.features
-- testCaseTitle: Specific title describing the scenario (e.g., "Login - Valid Credentials", "Login - Invalid Email Format")
+- testCaseTitle: Specific title — directly describes what scenario is being tested
 - requirementId: From analysis if available, else blank
-- priority: High/Medium/Low
-- severity: Critical/Major/Minor
+- priority: High/Medium/Low based on the scenario's criticality
+- severity: Critical/Major/Minor based on impact
 - testType: Functional/Regression/Smoke
 - preconditions: From analysis.userFlows[].preconditions or analysis.businessRules
-- testData: Concrete values for the scenario (e.g., "test@example.com", "Long_String_123!")
-- testSteps: Array of atomic steps
-- expectedResult: Exact outcome for the specific scenario
+- testData: Concrete values using field types from analysis.formFields
+- testSteps: Array of atomic steps derived from analysis.userFlows
+- expectedResult: The exact outcome stated or implied by the analysis
 - actualResult: "Pending execution"
 - status: "Not Executed"
 - environment: "QA"
@@ -536,16 +518,12 @@ Return valid JSON only, no markdown.`
 
 The document analysis below was produced by a previous AI step that carefully read the original API specification and extracted all endpoints, fields, request/response structures, auth requirements, and testable scenarios.
 
-Your task: Generate a COMPREHENSIVE set of API test cases based on the analysis below.
-- Maximum Coverage: Every endpoint and method in the analysis must have multiple test cases.
-- Comprehensive Testing: For each endpoint, generate test cases for:
-  - Success (2xx)
-  - Validation failures (400) for EACH input field (missing, wrong type, invalid format)
-  - Auth failures (401, 403)
-  - Not Found (404)
-  - Edge cases (large payloads, empty params, special characters)
-- Specificity: Use EXACT endpoint paths and field names from the analysis.
-- Volume: Generate as many distinct test cases as needed to achieve deep coverage (typically 5-10 test cases per endpoint).
+Your task: Generate API test cases STRICTLY based on the analysis below.
+- Every test case must map to a specific endpoint or scenario in the analysis.
+- Use the EXACT endpoint paths, HTTP methods, field names, and values from the analysis.
+- Cover success flows, validation errors, auth failures, not found, and edge cases — but ONLY for items present in the analysis.
+- Do NOT invent endpoints, fields, or behaviors not present in the analysis.
+- Generate exactly as many test cases as the analysis genuinely supports.
 
 ${analysisBlock}
 
@@ -555,23 +533,23 @@ ${fieldsToGenerate.map((f, i) => `${i + 1}. ${f}`).join('\n')}
 FIELD DEFINITIONS:
 - testCaseId: Unique identifier (TC_API_001, TC_API_002, ...)
 - apiName: Endpoint name from analysis.endpoints[].name
-- module: From analysis
-- httpMethod: Exact method
-- endpointUrl: Exact path
-- authorizationType: From analysis
-- requestHeaders: Headers from analysis
-- requestPayload: Complete JSON payload for the scenario
-- queryParameters: Object with param names and test values
-- pathParameters: Object with param names and test values
-- preconditions: Prerequisites
-- expectedStatusCode: The status code expected for this specific scenario
-- expectedResponseBody: Expected response structure or error message
-- responseTime: "<500ms"
-- databaseValidation: DB assertions if applicable
-- webhookValidation: Webhook assertions if applicable
+- module: From analysis (module/service name)
+- httpMethod: Exact method from analysis.endpoints[].method
+- endpointUrl: Exact path from analysis.endpoints[].path
+- authorizationType: From analysis.authType
+- requestHeaders: Headers from analysis.endpoints[].requestHeaders
+- requestPayload: Request body using fields from analysis.endpoints[].requestBody
+- queryParameters: From analysis.endpoints[].queryParams
+- pathParameters: From analysis.endpoints[].pathParams
+- preconditions: Prerequisites from analysis
+- expectedStatusCode: Status code matching the scenario type
+- expectedResponseBody: From analysis.endpoints[].successResponse or errorResponses
+- responseTime: "<500ms" unless stated otherwise in the analysis
+- databaseValidation: DB assertions if in the analysis, else blank
+- webhookValidation: Webhook validations if in the analysis, else blank
 - actualResponse: "Pending execution"
 - status: "Not Executed"
-- remarks: Scenario type (Success/Validation Error/Auth Error/Not Found/Edge Case/Boundary Value)
+- remarks: Scenario type (Success/Validation Error/Auth Error/Not Found/Edge Case)
 
 OUTPUT FORMAT:
 {
