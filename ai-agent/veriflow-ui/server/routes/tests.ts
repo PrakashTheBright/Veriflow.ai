@@ -574,7 +574,13 @@ router.post('/execute', async (req: AuthRequest, res) => {
         console.log(`[Test ${testId}] Process exited with code ${code}, signal ${signal}`)
         // Deregister from active process map on any exit.
         activeAgentProcesses.delete(testId)
-        activeExecutionIds.delete(executionId)
+        // NOTE: activeExecutionIds.delete() is called AFTER the DB update below.
+        // Deleting it here (before the await pool.query) creates a race: if the
+        // frontend polls GET /execution/:id between this line and the DB update,
+        // it sees status='running' + not-in-activeExecutionIds and prematurely
+        // marks the execution as 'failed', causing the UI to show Failed even
+        // when the test actually passed.
+
         // Release the global UI lock so the next UI test can proceed.
         if (activeUITestId === testId) {
           activeUITestId = null
@@ -615,6 +621,11 @@ router.post('/execute', async (req: AuthRequest, res) => {
         } catch (dbError) {
           console.error(`[Test ${testId}] Database update error:`, dbError)
         }
+
+        // Remove from active set AFTER the DB is updated. This prevents the
+        // GET /execution/:id polling handler from seeing status='running' +
+        // not-in-activeExecutionIds and wrongly flipping the status to 'failed'.
+        activeExecutionIds.delete(executionId)
 
         // Emit completion event with 100% progress - ALWAYS set progress to 100 on completion
         const completionEvent = {
