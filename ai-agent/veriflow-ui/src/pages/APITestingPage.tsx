@@ -177,6 +177,7 @@ export default function APITestingPage() {
   const [tests, setTests] = useState<APITest[]>(defaultTests)
   const [loading, setLoading] = useState(true)
   const [runningAll, setRunningAll] = useState(false)
+  const [runningE2E, setRunningE2E] = useState(false)
   const [expandedTest, setExpandedTest] = useState<string | null>(null)
   const [environments, setEnvironments] = useState<Environment[]>(loadEnvironments())
   const [selectedEnvironment, setSelectedEnvironment] = useState<Environment>(loadSelectedEnvironment())
@@ -248,6 +249,19 @@ export default function APITestingPage() {
       )
     )
 
+    // Completion promise: runTest only resolves once the test reaches passed/failed.
+    // This makes runE2EWorkflow and runAllTests truly sequential — each test fully
+    // completes before the next one starts.
+    let resolveCompletion!: () => void
+    const completionPromise = new Promise<void>(res => { resolveCompletion = res })
+
+    // Safety timeout: resolve after 10 minutes to prevent the loop from hanging
+    // indefinitely if a socket completion event is never received.
+    const safetyTimeout = setTimeout(() => {
+      console.warn(`[API Test ${testId}] Safety timeout reached — resolving completion`)
+      resolveCompletion()
+    }, 10 * 60 * 1000)
+
     // Subscribe to real-time updates
     const unsubscribe = subscribeToTest(testId, async (status) => {
       setTests((prev) =>
@@ -288,6 +302,8 @@ export default function APITestingPage() {
           toast.error(`${test.name} failed`)
         }
         unsubscribe?.()
+        clearTimeout(safetyTimeout)
+        resolveCompletion()
       }
     })
 
@@ -308,23 +324,30 @@ export default function APITestingPage() {
       )
       toast.error('Test execution failed')
       unsubscribe?.()
+      clearTimeout(safetyTimeout)
+      resolveCompletion()
     }
+
+    // Await true completion before returning so callers (runE2EWorkflow, runAllTests)
+    // advance to the next test only after this one has fully finished.
+    await completionPromise
   }, [tests, subscribeToTest, selectedEnvironment])
 
   const runAllTests = async () => {
     setRunningAll(true)
-    for (const test of tests) {
-      if (test.status !== 'running') {
-        await runTest(test.id)
-        await new Promise((resolve) => setTimeout(resolve, 500))
-      }
-    }
+    // Fire all non-running tests simultaneously — API tests are independent
+    // and the backend supports concurrent Playwright executions for API type.
+    await Promise.all(
+      tests
+        .filter(test => test.status !== 'running')
+        .map(test => runTest(test.id))
+    )
     setRunningAll(false)
     toast.success('All API tests completed!')
   }
 
   const runE2EWorkflow = async () => {
-    setRunningAll(true)
+    setRunningE2E(true)
     toast.loading('Running E2E Workflow...', { id: 'e2e' })
     
     for (const test of tests) {
@@ -333,7 +356,7 @@ export default function APITestingPage() {
     }
     
     toast.dismiss('e2e')
-    setRunningAll(false)
+    setRunningE2E(false)
     toast.success('E2E Workflow completed!')
   }
 
@@ -452,7 +475,7 @@ export default function APITestingPage() {
               </button>
               <button
                 onClick={runAllTests}
-                disabled={runningAll}
+                disabled={runningAll || runningE2E}
                 className="btn-secondary flex items-center gap-2 disabled:opacity-50 hover:scale-105 transition-transform"
               >
                 {runningAll ? (
@@ -464,10 +487,10 @@ export default function APITestingPage() {
               </button>
               <button
                 onClick={runE2EWorkflow}
-                disabled={runningAll}
+                disabled={runningAll || runningE2E}
                 className="btn-primary flex items-center gap-2 disabled:opacity-50 hover:scale-105 transition-transform"
               >
-                {runningAll ? (
+                {runningE2E ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <ArrowRight className="w-4 h-4" />
