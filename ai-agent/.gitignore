@@ -52,3 +52,7 @@ coverage/
 # Temporary files
 *.tmp
 *.temp
+*.txt
+tmp_*.js
+.testcase-history.json
+veriflow-ui/.testcase-history.json
