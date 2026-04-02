@@ -103,6 +103,11 @@ const LogTextActionSchema = BaseActionSchema.extend({
   label: z.string().optional()
 });
 
+const LogSectionActionSchema = BaseActionSchema.extend({
+  type: z.literal(ActionType.LOG_SECTION),
+  sectionTitle: z.string()
+});
+
 const ActionSchema = z.discriminatedUnion('type', [
   NavigateActionSchema,
   ClickActionSchema,
@@ -114,7 +119,8 @@ const ActionSchema = z.discriminatedUnion('type', [
   AssertVisibleActionSchema,
   AssertUrlActionSchema,
   ScreenshotActionSchema,
-  LogTextActionSchema
+  LogTextActionSchema,
+  LogSectionActionSchema
 ]);
 
 const TestCaseSchema = z.object({
@@ -616,18 +622,19 @@ export class ActionParser {
       };
     }
 
-    // Wait for selector pattern: "wait for selector <selector> [to be hidden|visible|attached|detached]"
-    const waitForSelectorMatch = instruction.match(/^wait\s+for\s+selector\s+(.+?)(?:\s+to\s+be\s+(hidden|visible|attached|detached))?$/i);
+    // Wait for selector pattern: "wait for selector <selector> [to be hidden|visible|attached|detached] [timeout <ms>]"
+    const waitForSelectorMatch = instruction.match(/^wait\s+for\s+selector\s+(.+?)(?:\s+to\s+be\s+(hidden|visible|attached|detached))?(?:\s+timeout\s+(\d+))?$/i);
     if (waitForSelectorMatch) {
       const selector = waitForSelectorMatch[1].trim();
       const stateMatch = waitForSelectorMatch[2];
       const state = stateMatch ? stateMatch.toLowerCase() as 'hidden' | 'visible' | 'attached' | 'detached' : 'visible';
+      const timeout = waitForSelectorMatch[3] ? parseInt(waitForSelectorMatch[3], 10) : 60000;
       return {
         type: 'waitForSelector',
         description: original,
         selector: selector,
         state: state,
-        timeout: 60000
+        timeout: timeout
       };
     }
 
@@ -686,6 +693,16 @@ export class ActionParser {
         description: original,
         selector: 'input[type="file"]',
         filePath: uploadFileMatch[1]
+      };
+    }
+
+    // Log section header pattern: "log section 'Title'" — creates a named section break in the report
+    const logSectionMatch = original.match(/^log\s+section\s+["']([^"']+)["']/i);
+    if (logSectionMatch) {
+      return {
+        type: 'logSection',
+        description: original,
+        sectionTitle: logSectionMatch[1].trim()
       };
     }
 

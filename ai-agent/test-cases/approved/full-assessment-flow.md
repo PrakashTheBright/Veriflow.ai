@@ -1,4 +1,4 @@
-# Create Assessment Flow - Executable Version
+# Old E2E Flow
 
 ## Login
 1. navigate to ${APP_URL}

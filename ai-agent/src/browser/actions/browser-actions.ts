@@ -25,6 +25,7 @@ import {
   UploadFileAction,
   SwitchFrameAction,
   LogTextAction,
+  LogSectionAction,
   SelectDateAction,
   CheckVisibleOrLogAction,
   ResetCandidateByStatusAction
@@ -110,6 +111,8 @@ export class BrowserActions {
       case ActionType.LOG_TEXT:
         const loggedData = await this.logText(action as LogTextAction);
         return { loggedData };
+      case ActionType.LOG_SECTION:
+        return { loggedData: { label: `═══${(action as LogSectionAction).sectionTitle}`, value: '' } };
       case ActionType.SELECT_DATE:
         await this.selectDate(action as SelectDateAction);
         break;

@@ -224,21 +224,39 @@ router.get('/ui', async (req, res) => {
     // Preferred ordering for UI tests
     const preferredOrder = [
       'full-assessment-flow.md',
+      'create-assessment.md',
+      'add-candidate.md',
+      'add-candidate-to-assessment.md',
+      'Create_Assessment_Add_Candidate_E2E.md',
       'send-invite-email.md',
+      'trigger-candidate-invite.md',
       'send-reminder-email.md',
       'send-reminder-ivr.md',
-      'extend-interview-expiry.md',
+      'reset-interview.md',
     ]
 
     const mdFiles = files.filter((file) => file.endsWith('.md'))
     const sortedFiles = sortWithPreferredOrder(mdFiles, preferredOrder)
 
-    const testCases = sortedFiles.map((file, index) => ({
-      id: `ui-${index + 1}`,
-      name: file.replace('.md', '').replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
-      fileName: file,
-      type: 'ui',
-      status: 'pending',
+    const testCases = await Promise.all(sortedFiles.map(async (file, index) => {
+      // Try to read the # heading from the markdown file for display name
+      let name = file.replace('.md', '').replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
+      try {
+        const content = await fs.readFile(path.join(testCasesPath, file), 'utf-8')
+        const headingMatch = content.match(/^#\s+(.+)$/m)
+        if (headingMatch) {
+          name = headingMatch[1].trim()
+        }
+      } catch {
+        // fallback to filename-based name
+      }
+      return {
+        id: `ui-${index + 1}`,
+        name,
+        fileName: file,
+        type: 'ui',
+        status: 'pending',
+      }
     }))
 
     res.json({ testCases })
