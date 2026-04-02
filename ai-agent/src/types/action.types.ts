@@ -30,6 +30,7 @@ export enum ActionType {
   SET_COOKIE = 'setCookie',
   CLEAR_COOKIES = 'clearCookies',
   LOG_TEXT = 'logText',
+  LOG_SECTION = 'logSection',
   SELECT_DATE = 'selectDate',
   CHECK_VISIBLE_OR_LOG = 'checkVisibleOrLog',
   RESET_CANDIDATE_BY_STATUS = 'resetCandidateByStatus',
@@ -173,6 +174,11 @@ export interface LogTextAction extends BaseAction {
   label?: string; // Label to display with the text (e.g., "Match Score", "Status")
 }
 
+export interface LogSectionAction extends BaseAction {
+  type: ActionType.LOG_SECTION;
+  sectionTitle: string; // Title for the new section in the logged data report
+}
+
 export interface SelectDateAction extends BaseAction {
   type: ActionType.SELECT_DATE;
   date: string; // Date in DD-MMM-YYYY format (e.g., "13-Mar-2026")
@@ -213,6 +219,7 @@ export type Action =
   | UploadFileAction
   | SwitchFrameAction
   | LogTextAction
+  | LogSectionAction
   | SelectDateAction
   | CheckVisibleOrLogAction
   | ResetCandidateByStatusAction

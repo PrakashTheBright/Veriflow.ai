@@ -31,7 +31,8 @@ Identify candidates with **Interrupted**, **In Progress**, or **Interview Expire
 19. reset candidate by status "Interrupted" otherwise continue
 20. reset candidate by status "Interview Expired" otherwise continue
 21. reset candidate by status "In Progress" otherwise continue
-22. log "No candidate has Interrupted, In Progress, or Interview Expired status" label "Status Check"
+22. wait 2 seconds
 
 ## Verify Reset Interview Success
-23. take screenshot
+23. log text from selector .ant-message-notice-content label "Reset Status Message"
+24. take screenshot

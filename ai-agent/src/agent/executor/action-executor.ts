@@ -211,13 +211,18 @@ export class ActionExecutor {
           // Handle both single item and array of items
           if (Array.isArray(actionResult.loggedData)) {
             for (const item of actionResult.loggedData) {
+              // Skip section header markers — they carry no meaningful stored value
+              if (item.label.startsWith('═══')) continue;
               this.storedVariables.set(item.label, item.value);
               this.logger.debug(`Stored variable "${item.label}" = "${item.value}"`);
             }
           } else {
             const { label, value } = actionResult.loggedData;
-            this.storedVariables.set(label, value);
-            this.logger.debug(`Stored variable "${label}" = "${value}"`);
+            // Skip section header markers
+            if (!label.startsWith('═══')) {
+              this.storedVariables.set(label, value);
+              this.logger.debug(`Stored variable "${label}" = "${value}"`);
+            }
           }
         }
         

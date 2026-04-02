@@ -295,8 +295,10 @@ export class ReportService {
                 const label = (ld as any).label;
                 const value = (ld as any).value ?? (typeof ld === 'string' ? ld : undefined);
 
-                // If the value looks like a concatenated composite (contains email or expiry date), parse it
-                const looksComposite = typeof value === 'string' && (/[\w.+-]+@[\w.-]+\.\w+/.test(value) || /\d{1,2}-[A-Za-z]{3}-\d{4}/.test(value));
+                // Only attempt composite parsing when there is no explicit label — if a label
+                // is already set the value is an individually-extracted cell and does not need
+                // splitting (avoids false positives when an email or date appears as a plain value).
+                const looksComposite = !label && typeof value === 'string' && (/[\w.+-]+@[\w.-]+\.\w+/.test(value) || /\d{1,2}-[A-Za-z]{3}-\d{4}/.test(value));
                 if (looksComposite) {
                     const parsed = parseCompositeLoggedValue(String(value));
                     if (parsed.length > 0) {
@@ -314,8 +316,8 @@ export class ReportService {
         }
 
     // Split logged data into sections based on section headers (labels starting with "═══")
-    const loggedDataSections: { title: string; items: { label: string; value: string }[] }[] = [];
-    let currentSection: { title: string; items: { label: string; value: string }[] } | null = null;
+    const loggedDataSections: { title: string; items: { label: string; value: string; changed?: boolean }[] }[] = [];
+    let currentSection: { title: string; items: { label: string; value: string; changed?: boolean }[] } | null = null;
 
     for (const item of loggedDataItems) {
         // Check if this is a section header (starts with "═══" and has empty value)
@@ -326,14 +328,30 @@ export class ReportService {
             loggedDataSections.push(currentSection);
         } else if (currentSection) {
             // Add to current section
-            currentSection.items.push(item);
+            currentSection.items.push({ ...item });
         } else {
             // No section yet, create a default one
             if (loggedDataSections.length === 0) {
                 currentSection = { title: 'Logged Data Summary', items: [] };
                 loggedDataSections.push(currentSection);
             }
-            currentSection!.items.push(item);
+            currentSection!.items.push({ ...item });
+        }
+    }
+
+    // Compute diff: mark items in sections 2+ whose value differs from the matching label in section 1
+    if (loggedDataSections.length >= 2) {
+        const beforeMap = new Map<string, string>();
+        for (const item of loggedDataSections[0].items) {
+            beforeMap.set(item.label, item.value);
+        }
+        for (let i = 1; i < loggedDataSections.length; i++) {
+            for (const item of loggedDataSections[i].items) {
+                const beforeValue = beforeMap.get(item.label);
+                if (beforeValue !== undefined && beforeValue !== item.value) {
+                    item.changed = true;
+                }
+            }
         }
     }
 
@@ -573,6 +591,35 @@ export class ReportService {
             background: #f8fafc;
             font-size: 0.95em;
         }
+        .value-changed td:last-child {
+            background: #fef9c3 !important;
+            color: #92400e !important;
+            font-weight: 700;
+        }
+        .value-changed td:first-child {
+            color: #92400e;
+        }
+        .value-changed-badge {
+            display: inline-block;
+            font-size: 0.72em;
+            background: #fde68a;
+            color: #92400e;
+            border: 1px solid #f59e0b;
+            border-radius: 4px;
+            padding: 1px 6px;
+            margin-left: 8px;
+            font-weight: 600;
+            vertical-align: middle;
+            letter-spacing: 0.3px;
+        }
+        .section-divider {
+            border: none;
+            border-top: 2px dashed #e5e7eb;
+            margin: 32px 0;
+        }
+        .logged-data-table-wrapper:last-child {
+            margin-bottom: 0;
+        }
         .metadata { 
             background: white;
             padding: 20px;
@@ -624,7 +671,8 @@ export class ReportService {
         <div class="logged-data-section">
             {{#if hasMultipleSections}}
             {{#each loggedDataSections}}
-            <div class="logged-data-table-wrapper" style="margin-bottom: 24px;">
+            {{#if @index}}<hr class="section-divider">{{/if}}
+            <div class="logged-data-table-wrapper">
                 <h3>📋 {{title}}</h3>
                 <table class="logged-data-table">
                     <thead>
@@ -635,9 +683,9 @@ export class ReportService {
                     </thead>
                     <tbody>
                         {{#each items}}
-                        <tr>
+                        <tr{{#if changed}} class="value-changed"{{/if}}>
                             <td>{{label}}</td>
-                            <td>{{value}}</td>
+                            <td>{{value}}{{#if changed}}<span class="value-changed-badge">changed</span>{{/if}}</td>
                         </tr>
                         {{/each}}
                     </tbody>
